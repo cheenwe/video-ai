@@ -1,0 +1,122 @@
+name: Test and build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test and build frontend
+        working-directory: frontend
+        run: npm ci && npm run typecheck && npm test && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 7
+  backend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test, race check and vet
+        working-directory: backend
+        run: go test -race ./... && go vet ./...
+  packages:
+    needs: [frontend, backend]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - name: Build complete distribution
+        run: bash scripts/package.sh '${{ matrix.os }}' '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baseplatform-${{ matrix.os }}-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 30
+  docker:
+    needs: [frontend, backend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          platforms: linux/${{ matrix.arch }}
+          tags: baseplatform:ci
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+      - name: Container startup, static files and volume persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -hex 20)a1"
+          echo "::add-mask::$password"
+          export BASE_ADMIN_PASSWORD="$password"
+          docker volume create baseplatform-ci-data
+          docker run -d --name baseplatform-ci -p 127.0.0.1:18181:8181 -e BASE_ADMIN_PASSWORD -v baseplatform-ci-data:/app/data baseplatform:ci
+          for attempt in $(seq 1 60); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' baseplatform-ci)
+            if [ "$status" = healthy ]; then break; fi
+            sleep 2
+          done
+          test "$status" = healthy
+          curl --fail http://127.0.0.1:18181/ | grep -q '<div id="app"'
+          docker stop --time 45 baseplatform-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' baseplatform-ci)" = 0
+          docker rm baseplatform-ci
+          # Existing database must restart without the bootstrap password.
+          docker run -d --name baseplatform-ci -p 127.0.0.1:18181:8181 -v baseplatform-ci-data:/app/data baseplatform:ci
+          for attempt in $(seq 1 60); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' baseplatform-ci)
+            if [ "$status" = healthy ]; then break; fi
+            sleep 2
+          done
+          test "$status" = healthy
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          docker logs baseplatform-ci || true
+          docker rm -f baseplatform-ci || true
+          docker volume rm baseplatform-ci-data || true

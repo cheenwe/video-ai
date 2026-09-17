@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+backend/data/
+frontend/node_modules/
+frontend/dist/
+build/
+*.db
+*.db-shm
+*.db-wal
+*.key
+doc/
+data/
+release/

@@ -1,0 +1,29 @@
+/* Mobile rules for the current management platform (not the migrated file browser). */
+.va-content .row > *, .va-content .card, .va-content .card-body { min-width: 0; }
+.va-content .table-responsive { max-width: 100%; overscroll-behavior-x: contain; }
+.va-content .card-header { flex-wrap: wrap; gap: .5rem; }
+.va-content pre, .cd-modal-backdrop pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  body.va-drawer-open { overflow: hidden; }
+  .va-content > div > .d-flex { flex-wrap: wrap; }
+  .va-content .card-header > .d-flex { flex-wrap: wrap; min-width: 0; }
+  .va-content .card-title { overflow-wrap: anywhere; }
+  .va-content .form-control, .va-content .form-select,
+  .cd-modal-backdrop .form-control, .cd-modal-backdrop .form-select { min-width: 0; font-size: 16px; }
+  .va-content .btn, .cd-modal-backdrop .btn { min-height: 40px; }
+  .va-content .list-group-item > .text-start { min-width: 0; flex: 1; }
+  .va-content .list-group-item > .d-flex { flex-shrink: 0; }
+  .va-content .list-group-item .fw-semibold { overflow-wrap: anywhere; }
+  .cd-pagination { gap: .5rem; }
+  .cd-pagination .pagination { flex-wrap: wrap; gap: .25rem; }
+  .cd-pagination .page-link { min-height: 40px; min-width: 36px; }
+  .cd-modal-backdrop .modal-dialog { margin: 12px; max-width: calc(100vw - 24px); min-height: calc(100dvh - 24px); }
+  .cd-modal-backdrop .modal-content { max-width: 100%; overflow-wrap: anywhere; }
+  .cd-modal-backdrop .modal-header { flex-wrap: wrap; padding: 12px; }
+  .cd-modal-backdrop .modal-title { white-space: normal; }
+  .cd-modal-backdrop .modal-body { padding: 16px; min-width: 0; }
+  .cd-modal-backdrop .modal-footer { gap: 8px; padding: 12px; flex-wrap: wrap; }
+  .cd-modal-backdrop .btn-close { min-width: 32px; min-height: 32px; }
+  .va-content .nav-pills { gap: 4px; }
+  .va-content .nav-pills .nav-link { min-height: 40px; }
+}

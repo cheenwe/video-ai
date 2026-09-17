@@ -1,0 +1,20 @@
+services:
+  baseplatform:
+    image: baseplatform:local
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "${BASE_BIND_ADDRESS:-127.0.0.1}:${BASE_PUBLIC_PORT:-8181}:8181"
+    environment:
+      BASE_ADMIN_PASSWORD: ${BASE_ADMIN_PASSWORD:-ChangeMe123}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - base-data:/app/data
+    stop_grace_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  base-data:

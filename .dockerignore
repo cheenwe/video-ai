@@ -1,0 +1,16 @@
+.git
+.github
+**/node_modules
+**/dist
+build
+release
+data
+**/data
+.env
+.env.*
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.key
+**/*.log
+.DS_Store
