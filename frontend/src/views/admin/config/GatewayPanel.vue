@@ -39,14 +39,14 @@ async function save() {
         <span class="form-check-label">启用个人访问令牌（Profile / REST）</span>
       </label>
       <p class="text-secondary small mb-0">
-        开启后，用户可在个人资料中生成 <code>nf_…</code> 前缀的个人访问令牌，作为 REST API 的 Bearer 凭据使用。
+        开启后，用户可在个人资料中生成 <code>va_…</code> 前缀的个人访问令牌，作为 REST API 的 Bearer 凭据使用。
         可在 Header <code>X-API-Key</code> 或 <code>Authorization: Bearer</code> 中携带。
       </p>
     </div>
 
     <div class="alert alert-secondary small mb-0">
-      <strong>guest 账号：</strong>系统种子用户 <code>guest</code>（默认密码 <code>guest</code>），禁止 Web 登录。
-      可由管理员在用户管理中代发个人访问令牌用于程序化访问。
+      程序化访问请使用已登录用户的个人访问令牌。
+      系统不会自动创建 <code>guest</code> 账号；如需专用 API 账号，请在用户管理中新建，并可关闭其 Web 登录。
     </div>
 
     <div class="cd-settings-actions">

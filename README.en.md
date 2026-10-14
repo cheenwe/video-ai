@@ -55,18 +55,18 @@ export BASE_ADMIN_PASSWORD='your-own-admin-password'
 go run ./cmd/baseplatform
 ```
 
-Open <http://127.0.0.1:5173> as `admin` (default password `ChangeMe123`). See [docs/快速开始.md](docs/快速开始.md) (Chinese) for the full walkthrough.
+Open <http://127.0.0.1:5173> as `admin` (default password `ChangeMe123`). See [docs/quickstart.md](docs/quickstart.md) for the full walkthrough.
 
 ## Documentation
 
 | Doc | Description |
 | --- | --- |
 | [docs/README.md](docs/README.md) | Documentation index |
-| [docs/快速开始.md](docs/快速开始.md) | Local development & first login |
-| [docs/环境变量.md](docs/环境变量.md) | `BASE_*` reference |
-| [docs/部署.md](docs/部署.md) | Docker, packages & CI |
-| [docs/功能说明.md](docs/功能说明.md) | Implemented modules & menus |
-| [docs/运维与备份.md](docs/运维与备份.md) | Backup, restore & ops constraints |
+| [docs/quickstart.md](docs/quickstart.md) | Local development & first login |
+| [docs/environment.md](docs/environment.md) | `BASE_*` reference |
+| [docs/deployment.md](docs/deployment.md) | Docker, packages & CI |
+| [docs/features.md](docs/features.md) | Implemented modules & menus |
+| [docs/ops-backup.md](docs/ops-backup.md) | Backup, restore & ops constraints |
 
 ## Testing
 

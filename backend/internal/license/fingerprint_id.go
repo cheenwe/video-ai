@@ -15,6 +15,7 @@ var (
 	bareHexRe     = regexp.MustCompile(`^[0-9a-f]+$`)
 )
 
+// ToShortMachineID returns a compact binding code (VA1- + first 8 hex chars).
 func ToShortMachineID(id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -29,7 +30,7 @@ func ToShortMachineID(id string) string {
 	}
 	if strings.HasPrefix(id, FingerprintVersion+"-") {
 		hexPart := strings.TrimPrefix(id, FingerprintVersion+"-")
-		if len(hexPart) >= ShortFingerprintHexLen && bareHexRe.MatchString(hexPart[:ShortFingerprintHexLen]) {
+		if len(hexPart) >= ShortFingerprintHexLen && bareHexRe.MatchString(strings.ToLower(hexPart[:ShortFingerprintHexLen])) {
 			return FingerprintVersion + "-" + strings.ToLower(hexPart[:ShortFingerprintHexLen])
 		}
 	}
@@ -51,9 +52,7 @@ func NormalizeMachineIDInput(input string) (string, error) {
 	}
 	if bareHexRe.MatchString(lower) {
 		switch len(lower) {
-		case 32:
-			return FingerprintVersion + "-" + lower, nil
-		case ShortFingerprintHexLen:
+		case 32, ShortFingerprintHexLen:
 			return FingerprintVersion + "-" + lower, nil
 		default:
 			if len(lower) > ShortFingerprintHexLen && len(lower) < 32 {

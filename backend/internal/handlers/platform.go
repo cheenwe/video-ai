@@ -251,10 +251,10 @@ func (h *PlatformHandler) Health(c *gin.Context) {
 	// 数据库
 	dbComp := healthComponent{Status: "ok"}
 	if sqlDB, err := h.DB.DB(); err != nil {
-		dbComp = healthComponent{Status: "down", Detail: err.Error()}
+		dbComp = healthComponent{Status: "down"}
 		overall = "down"
 	} else if err := sqlDB.Ping(); err != nil {
-		dbComp = healthComponent{Status: "down", Detail: err.Error()}
+		dbComp = healthComponent{Status: "down"}
 		overall = "down"
 	}
 	components["database"] = dbComp
@@ -306,13 +306,16 @@ func (h *PlatformHandler) Roles(c *gin.Context) {
 
 // --- Email settings ---
 
-func (h *PlatformHandler) Email(c *gin.Context) { response.OK(c, settings.LoadEmail(h.DB), "") }
+func (h *PlatformHandler) Email(c *gin.Context) {
+	response.OK(c, settings.RedactEmail(settings.LoadEmail(h.DB)), "")
+}
 func (h *PlatformHandler) SaveEmail(c *gin.Context) {
 	var e settings.Email
 	if c.ShouldBindJSON(&e) != nil {
 		response.BizFail(c, "参数错误", 422)
 		return
 	}
+	e = settings.MergeEmailSecrets(e, settings.LoadEmail(h.DB))
 	if e.Enabled {
 		if e.SMTPHost == "" || e.SMTPPort < 1 || e.SMTPPort > 65535 || e.From == "" {
 			response.BizFail(c, "启用邮件需填写 SMTP 主机、端口和发件人", 422)
@@ -325,7 +328,7 @@ func (h *PlatformHandler) SaveEmail(c *gin.Context) {
 		return
 	}
 	services.LogAction(h.DB, c, "audit", "success", "settings.email", &u, "")
-	response.OK(c, e, "已保存")
+	response.OK(c, settings.RedactEmail(e), "已保存")
 }
 
 type emailTestReq struct {
@@ -355,13 +358,16 @@ func (h *PlatformHandler) EmailTest(c *gin.Context) {
 
 // --- LDAP settings ---
 
-func (h *PlatformHandler) LDAP(c *gin.Context) { response.OK(c, settings.LoadLDAP(h.DB), "") }
+func (h *PlatformHandler) LDAP(c *gin.Context) {
+	response.OK(c, settings.RedactLDAP(settings.LoadLDAP(h.DB)), "")
+}
 func (h *PlatformHandler) SaveLDAP(c *gin.Context) {
 	var l settings.LDAP
 	if c.ShouldBindJSON(&l) != nil {
 		response.BizFail(c, "参数错误", 422)
 		return
 	}
+	l = settings.MergeLDAPSecrets(l, settings.LoadLDAP(h.DB))
 	if l.Enabled {
 		if l.Host == "" || l.BaseDN == "" {
 			response.BizFail(c, "启用 LDAP 需填写 Host 与 Base DN", 422)
@@ -375,7 +381,7 @@ func (h *PlatformHandler) SaveLDAP(c *gin.Context) {
 		return
 	}
 	services.LogAction(h.DB, c, "audit", "success", "settings.ldap", &u, "")
-	response.OK(c, l, "已保存")
+	response.OK(c, settings.RedactLDAP(l), "已保存")
 }
 
 func (h *PlatformHandler) LDAPTest(c *gin.Context) {
@@ -490,7 +496,7 @@ func loadBranding(db *gorm.DB) Branding {
 // --- Cloud storage app settings ---
 
 func (h *PlatformHandler) CloudStorageSettings(c *gin.Context) {
-	response.OK(c, settings.LoadCloudStorage(h.DB), "")
+	response.OK(c, settings.RedactCloudStorage(settings.LoadCloudStorage(h.DB)), "")
 }
 
 func (h *PlatformHandler) SaveCloudStorageSettings(c *gin.Context) {
@@ -500,13 +506,14 @@ func (h *PlatformHandler) SaveCloudStorageSettings(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
+	cfg = settings.MergeCloudStorageSecrets(cfg, settings.LoadCloudStorage(h.DB))
 	cfg = settings.MergeCloudStorageDefaults(cfg)
 	if err := settings.SaveSection(h.DB, "cloud_storage", cfg, &u.ID); err != nil {
 		response.BizFail(c, "保存失败", 500)
 		return
 	}
 	services.LogAction(h.DB, c, "audit", "success", "settings.cloud_storage", &u, "")
-	response.OK(c, cfg, "已保存")
+	response.OK(c, settings.RedactCloudStorage(cfg), "已保存")
 }
 
 // --- Watermark settings ---

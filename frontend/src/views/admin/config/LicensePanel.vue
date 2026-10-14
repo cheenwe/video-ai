@@ -57,7 +57,7 @@ const trialStatus = ref<licenseApi.TrialStatus | null>(null)
 const trialForm = ref({
   team_name: '',
   contact: '',
-  edition: 'flagship' as 'flagship',
+  edition: 'enterprise' as 'team' | 'enterprise',
 })
 const fileInput = ref<HTMLInputElement | null>(null)
 const fpQrCanvas = ref<HTMLCanvasElement | null>(null)
@@ -119,8 +119,17 @@ const showTrialSection = computed(
     trialStatus.value?.status === 'rejected',
 )
 
-const trialEditionLabel = (edition?: string) =>
-  edition === 'flagship' ? '旗舰版' : '社区版'
+const trialEditionLabel = (edition?: string) => {
+  switch (edition) {
+    case 'team':
+      return '团队版'
+    case 'enterprise':
+    case 'flagship':
+      return '旗舰版'
+    default:
+      return '社区版'
+  }
+}
 
 const trialStatusBadge = computed(() => {
   const s = trialStatus.value?.status
@@ -440,7 +449,7 @@ defineExpose({ saveLicenseCfg })
               <div class="cd-license__edition-row">
                 <span class="cd-license__edition-name">{{ licenseStore.editionLabel }}</span>
               </div>
-              <div class="cd-license__edition-version font-monospace">VideoAI v{{ licenseStore.version }}</div>
+              <div class="cd-license__edition-version font-monospace">v{{ licenseStore.version }}</div>
               <div class="cd-license__edition-tags">
                 <span class="badge" :class="licenseStatus.class">
                   <IconCircleCheck :size="12" class="me-1" />
@@ -581,7 +590,8 @@ defineExpose({ saveLicenseCfg })
               <div class="mb-3">
                 <label class="form-label small">试用版本</label>
                 <select v-model="trialForm.edition" class="form-select form-select-sm">
-                  <option value="flagship">旗舰版试用（15 天）</option>
+                  <option value="enterprise">旗舰版试用（15 天）</option>
+                  <option value="team">团队版试用（15 天）</option>
                 </select>
               </div>
               <button
@@ -685,7 +695,7 @@ defineExpose({ saveLicenseCfg })
       <form @submit.prevent="saveAdvancedCfg">
         <div class="modal-body">
           <p class="text-secondary small mb-3">
-            配置 VideoAI 授权服务器地址，用于在线激活、试用申请与授权信息同步。
+            配置授权服务器地址，用于在线激活、试用申请与授权信息同步。
           </p>
           <div class="mb-3">
             <label class="form-label">授权服务器地址</label>

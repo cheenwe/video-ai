@@ -22,11 +22,12 @@ import (
 )
 
 type AuthHandler struct {
-	DB      *gorm.DB
-	Cfg     *config.Config
-	Limiter *services.SecurityLoginLimiter
-	Captcha *services.CaptchaStore
-	LDAP    *services.LDAPAuth
+	DB             *gorm.DB
+	Cfg            *config.Config
+	Limiter        *services.SecurityLoginLimiter
+	Captcha        *services.CaptchaStore
+	CaptchaLimiter *services.IPRateLimiter
+	LDAP           *services.LDAPAuth
 }
 
 type profileReq struct {
@@ -120,8 +121,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			response.BizFail(c, "签发临时凭证失败", 500)
 			return
 		}
-		h.Limiter.Clear(ip)
-		h.Limiter.ClearAccount(username)
+		// 不在此处 Clear IP/账号锁定：须完成 TOTP 后才清除，避免喷洒绕过。
 		services.LogAction(h.DB, c, "login", "success", "login.totp_challenge", &u, "")
 		response.OK(c, gin.H{"totp_required": true, "temp_token": temp}, "需要二次验证")
 		return
@@ -209,6 +209,8 @@ func (h *AuthHandler) LoginTOTP(c *gin.Context) {
 		return
 	}
 	h.Limiter.Clear(key)
+	h.Limiter.Clear(c.ClientIP())
+	h.Limiter.ClearAccount(u.Username)
 
 	token, _, err := security.CreateToken(h.Cfg.SecretKey, h.Cfg.JWTAlgorithm, h.Cfg.JWTExpireDays, u.ID, u.Username, u.Role, u.SessionVersion)
 	if err != nil {
@@ -223,6 +225,10 @@ func (h *AuthHandler) LoginTOTP(c *gin.Context) {
 
 // CaptchaCreate 生成登录验证码图片。
 func (h *AuthHandler) CaptchaCreate(c *gin.Context) {
+	if h.CaptchaLimiter != nil && !h.CaptchaLimiter.Allow(c.ClientIP()) {
+		response.Fail(c, 429, "请求过于频繁，请稍后重试", 429)
+		return
+	}
 	sec := settings.LoadSecurity(h.DB)
 	ch, err := h.Captcha.Create(sec.Captcha)
 	if err != nil {
@@ -267,7 +273,11 @@ func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 		response.BizFail(c, "已启用二次验证，请先禁用", 400)
 		return
 	}
-	secret, otpURL, err := services.GenerateTOTPSecret("VideoAI", u.Username)
+	issuer := strings.TrimSpace(loadBranding(h.DB).SiteName)
+	if issuer == "" {
+		issuer = "Base Platform"
+	}
+	secret, otpURL, err := services.GenerateTOTPSecret(issuer, u.Username)
 	if err != nil {
 		response.BizFail(c, "生成密钥失败", 500)
 		return

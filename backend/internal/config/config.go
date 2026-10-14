@@ -126,7 +126,7 @@ func (c *Config) DSN() string {
 	case "postgres":
 		sslmode := c.DBSSLMode
 		if sslmode == "" {
-			sslmode = "disable"
+			sslmode = "require"
 		}
 		return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=Asia/Shanghai",
 			c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, sslmode)

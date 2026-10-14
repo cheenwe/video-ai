@@ -10,6 +10,10 @@ build/
 *.db-shm
 *.db-wal
 *.key
+*.pem
+!backend/internal/license/public.pem
+**/private.pem
+**/keys/
 doc/
 data/
 release/

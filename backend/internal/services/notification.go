@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 	"baseplatform/internal/models"
+	"baseplatform/internal/security"
 )
 
 type NotificationService struct {
@@ -200,6 +201,9 @@ func (s *NotificationService) attempt(ctx context.Context, row models.WebhookDel
 	return s.DB.Model(&row).Updates(updates).Error
 }
 func (s *NotificationService) doPost(ctx context.Context, ep models.WebhookEndpoint, eventType, deliveryID, payload string) (int, string, error) {
+	if err := security.ResolveAndValidatePublicHTTPURL(ep.URL); err != nil {
+		return 0, "", err
+	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(max(1, min(ep.TimeoutSec, 30)))*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", ep.URL, bytes.NewBufferString(payload))

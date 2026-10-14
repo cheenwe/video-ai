@@ -20,23 +20,25 @@ type UserHandler struct {
 }
 
 type userCreateReq struct {
-	Username     string  `json:"username" binding:"required,min=3,max=64"`
-	Email        string  `json:"email" binding:"required,email,max=128"`
-	Password     string  `json:"password" binding:"required,min=5,max=128"`
-	Role         string  `json:"role"`
-	RealName     *string `json:"real_name"`
-	DepartmentID *uint   `json:"department_id"`
-	Timezone     string  `json:"timezone"`
+	Username        string  `json:"username" binding:"required,min=3,max=64"`
+	Email           string  `json:"email" binding:"required,email,max=128"`
+	Password        string  `json:"password" binding:"required,min=5,max=128"`
+	Role            string  `json:"role"`
+	RealName        *string `json:"real_name"`
+	DepartmentID    *uint   `json:"department_id"`
+	Timezone        string  `json:"timezone"`
+	WebLoginEnabled *bool   `json:"web_login_enabled"`
 }
 
 type userUpdateReq struct {
-	Username     *string `json:"username"`
-	Email        *string `json:"email"`
-	Role         *string `json:"role"`
-	RealName     *string `json:"real_name"`
-	DepartmentID *uint   `json:"department_id"`
-	NewPassword  *string `json:"new_password"`
-	Timezone     *string `json:"timezone"`
+	Username        *string `json:"username"`
+	Email           *string `json:"email"`
+	Role            *string `json:"role"`
+	RealName        *string `json:"real_name"`
+	DepartmentID    *uint   `json:"department_id"`
+	NewPassword     *string `json:"new_password"`
+	Timezone        *string `json:"timezone"`
+	WebLoginEnabled *bool   `json:"web_login_enabled"`
 }
 
 type disabledReq struct {
@@ -45,18 +47,19 @@ type disabledReq struct {
 
 func userOut(db *gorm.DB, u models.User) gin.H {
 	out := gin.H{
-		"id":            u.ID,
-		"username":      u.Username,
-		"email":         u.Email,
-		"role":          u.Role,
-		"disabled":      u.Disabled,
-		"real_name":     u.RealName,
-		"department_id": u.DepartmentID,
-		"timezone":      u.Timezone,
-		"avatar_url":    u.AvatarURL,
-		"created_at":    u.CreatedAt,
-		"is_system":     u.IsSystemUser(),
-		"auth_source":   u.AuthSource,
+		"id":                u.ID,
+		"username":          u.Username,
+		"email":             u.Email,
+		"role":              u.Role,
+		"disabled":          u.Disabled,
+		"web_login_enabled": u.WebLoginEnabled != 0,
+		"real_name":         u.RealName,
+		"department_id":     u.DepartmentID,
+		"timezone":          u.Timezone,
+		"avatar_url":        u.AvatarURL,
+		"created_at":        u.CreatedAt,
+		"is_system":         u.IsSystemUser(),
+		"auth_source":       u.AuthSource,
 	}
 	if u.DepartmentID != nil {
 		var dept models.Department
@@ -148,7 +151,10 @@ func (h *UserHandler) Create(c *gin.Context) {
 		response.BizFail(c, "密码处理失败", 500)
 		return
 	}
-	u := models.User{Username: username, Email: &email, PasswordHash: hash, Role: role, RealName: req.RealName, DepartmentID: req.DepartmentID, Timezone: tz}
+	u := models.User{Username: username, Email: &email, PasswordHash: hash, Role: role, RealName: req.RealName, DepartmentID: req.DepartmentID, Timezone: tz, WebLoginEnabled: 1, MustChangePassword: 1}
+	if req.WebLoginEnabled != nil && !*req.WebLoginEnabled {
+		u.WebLoginEnabled = 0
+	}
 	if req.DepartmentID != nil {
 		var dept models.Department
 		if err := h.DB.First(&dept, *req.DepartmentID).Error; err != nil {
@@ -267,6 +273,26 @@ func (h *UserHandler) Update(c *gin.Context) {
 	if req.Timezone != nil {
 		updates["timezone"] = *req.Timezone
 	}
+	if req.WebLoginEnabled != nil {
+		if u.ID == meActor.ID && !*req.WebLoginEnabled {
+			response.BizFail(c, "不能关闭本人的 Web 登录", 403)
+			return
+		}
+		if u.Username == "admin" && !*req.WebLoginEnabled {
+			response.BizFail(c, "不能关闭初始管理员的 Web 登录", 403)
+			return
+		}
+		enabled := 0
+		if *req.WebLoginEnabled {
+			enabled = 1
+		}
+		if enabled != u.WebLoginEnabled {
+			updates["web_login_enabled"] = enabled
+			if enabled == 0 {
+				updates["session_version"] = gorm.Expr("session_version + 1")
+			}
+		}
+	}
 	if req.NewPassword != nil {
 		pwd := strings.TrimSpace(*req.NewPassword)
 		if pwd == "" {
@@ -284,6 +310,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 			return
 		}
 		updates["password_hash"] = hash
+		updates["must_change_password"] = 1
 		updates["session_version"] = gorm.Expr("session_version + 1")
 	}
 	if len(updates) > 0 {

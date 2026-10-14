@@ -2,10 +2,10 @@ package handlers
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"baseplatform/internal/config"
-	"baseplatform/internal/middleware"
 	"baseplatform/internal/models"
 	"baseplatform/internal/response"
 	"baseplatform/internal/services"
@@ -21,8 +21,10 @@ type StorageCloudOAuthHandler struct {
 }
 
 func (h *StorageCloudOAuthHandler) cloudOAuthBaseURL(c *gin.Context) string {
-	if v := strings.TrimSpace(c.Query("base_url")); v != "" {
-		return strings.TrimRight(v, "/")
+	if h.Cfg != nil {
+		if v := strings.TrimSpace(os.Getenv("BASE_PUBLIC_URL")); v != "" {
+			return strings.TrimRight(v, "/")
+		}
 	}
 	return publicBaseURL(c, h.Cfg)
 }
@@ -129,7 +131,6 @@ func (h *StorageCloudOAuthHandler) Callback(c *gin.Context) {
 		response.BizFail(c, err.Error(), 502)
 		return
 	}
-	me := middleware.CurrentUser(c)
-	services.LogAction(h.DB, c, "audit", "success", "storage.cloud.oauth.callback", &me, st.Platform)
+	services.LogAction(h.DB, c, "audit", "success", "storage.cloud.oauth.callback", nil, st.Platform)
 	response.OK(c, nil, "授权成功")
 }

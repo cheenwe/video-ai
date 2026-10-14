@@ -174,23 +174,9 @@ func tryDecryptLicense(lic *SignedLicense) (*LicensePayload, error) {
 	return nil, errors.New("无法解密授权文件，请确认绑定指纹与本机一致，或改用 floating/在线激活")
 }
 
-// defaultPublicKeyPEM 与 nextfile/nextlicense 签发服务使用同一对 RSA 密钥：
-// 私钥由 nextlicense 的 KeysDir（data/keys/private.pem）持有用于签发，
-// 公钥内嵌于此用于验签，保证 nextfile 签发的授权可直接被本系统验证。
-var defaultPublicKeyPEM = []byte(`-----BEGIN PUBLIC KEY-----
-MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAqiZ1fFqa9k8WHUY87f//
-Ec2E15KgAeSxpdD8e/pdVIjoitSWoX8VDlx5Ukuyc/KEOLNgiL06pA+qcVCmWVK9
-mt/lJIELefMsmFYWKxgGZ/iVR/0RzBqeOoauQGhaOwsvdujxpoXGaJZZQScDHClb
-fh6C9NgchrOFFQHw7ANFrL3mrhJ/uFfQYLKrF1sB4hJzZLEdzD5YKo+GpGoJmMpc
-LgV+1mgRI6pQLN1qO27j0JvFq97/kF4PUSTjudP7fPcbIiliaZRiMPAjlkVNnsFD
-T//pOGpN9tdXyD8yKpHjk7v2EoQ/e/Gh8YKs2l0Vfb0cF7rRHSarzgB5bk4A3UGX
-xBmnAiPkSLXCTQvzMf/E2y5VHg2o4cvLV6/fyCGo0TChDgiibDSVxFmWe4w+9CQx
-TtCirr/fXNft8knegaAb4tsHt5thGHErMyuzujJUZ3VdDusrI2m3LgIz6bWl6SIn
-Fmsk4FPV2fUR2+mW8q0BTTOgubvwK8tYY3EsEoTxCWB9XQER31UezNrGd818njAm
-TR3cVdsjaPLQ/fCg+nRwRUSktxHR3TQnpJMPVvBWhzt4lETfE+bM2gN/Q3EedvD+
-WPsTEkID5gY2I7Gg/dPaDAagYXJa5c88AdYb36MQDZYo5lizoM85MsNwj8NHnbkk
-4nesFPJQs6ZA0zgKEOWK1OkCAwEAAQ==
------END PUBLIC KEY-----`)
+// defaultPublicKeyPEM is set from go:embed public.pem (nextlicense签发公钥) via InitPublicKey / SetDefaultPublicKeyPEM.
+// This repository never embeds or ships the private signing key.
+var defaultPublicKeyPEM = embeddedPublicKeyPEM
 
 func SetDefaultPublicKeyPEM(pemBytes []byte) {
 	defaultPublicKeyPEM = pemBytes

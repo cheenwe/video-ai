@@ -14,7 +14,7 @@
 
 Video AI 管理平台源自 [NextFile](https://github.com/cheenwe/nextfile) 的 Go / Vue 项目基础能力模块迁移，提取出与具体业务（视频）解耦的通用平台底座。项目使用真实数据库与真实 API，不依赖模拟管理数据。
 
-> 说明：仓库中 "Video AI" 品牌与命名沿用迁移来源约定；本开放仓库面向通用基础平台能力，视频相关的摄像头、抓斗模型与坑边算法等业务模块未包含在内，可自行在底座上扩展。
+> 说明：仓库中 "Video AI" 品牌与命名沿用迁移来源约定；本开放仓库面向通用基础平台能力，可自行在底座上扩展。
 
 ## 功能特性
 
@@ -50,22 +50,20 @@ npm run dev
 
 ```sh
 cd backend
-# 可选：首次初始化自定义管理员密码；未设置时默认 ChangeMe123（生产环境请修改）。
-export BASE_ADMIN_PASSWORD='替换为你自己的管理员密码'
 go run ./cmd/baseplatform
 ```
 
-访问 <http://127.0.0.1:5173>，账号 `admin`，默认密码 `ChangeMe123`。详细步骤见 [docs/快速开始.md](docs/快速开始.md)。
+访问 <http://127.0.0.1:5173>，账号 `admin`，默认密码 `ChangeMe123`。首次登录会强制修改密码，生产环境务必更换。如需在初始化时自定义密码，可通过 `BASE_ADMIN_PASSWORD` 环境变量指定。详细步骤见 [docs/quickstart.md](docs/quickstart.md)。
 
 ## 文档
 
 | 文档 | 说明 |
 | --- | --- |
-| [docs/快速开始.md](docs/快速开始.md) | 本地开发与首次登录 |
-| [docs/环境变量.md](docs/环境变量.md) | `BASE_*` 配置参考 |
-| [docs/部署.md](docs/部署.md) | Docker、二进制包与 CI |
-| [docs/功能说明.md](docs/功能说明.md) | 已实现模块与菜单 |
-| [docs/运维与备份.md](docs/运维与备份.md) | 备份恢复与运行约束 |
+| [docs/quickstart.md](docs/quickstart.md) | 本地开发与首次登录 |
+| [docs/environment.md](docs/environment.md) | `BASE_*` 配置参考 |
+| [docs/deployment.md](docs/deployment.md) | Docker、二进制包与 CI |
+| [docs/features.md](docs/features.md) | 已实现模块与菜单 |
+| [docs/ops-backup.md](docs/ops-backup.md) | 备份恢复与运行约束 |
 | [docs/README.md](docs/README.md) | 完整文档索引 |
 
 ## 测试
@@ -87,4 +85,4 @@ make test
 
 ## Docker 与 GitHub CI
 
-支持 Docker Compose 一键构建部署、数据卷持久化及容器健康检查。GitHub Actions 自动测试并生成六平台程序包。详见 [docs/部署.md](docs/部署.md)。
+支持 Docker Compose 一键构建部署、数据卷持久化及容器健康检查。GitHub Actions 自动测试并生成六平台程序包。详见 [docs/deployment.md](docs/deployment.md)。

@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 
 	"baseplatform/internal/config"
 	"baseplatform/internal/models"
+	"baseplatform/internal/settings"
 
 	"gorm.io/gorm"
 )
@@ -101,6 +103,11 @@ func (m *Manager) localBasePath(s *models.Storage) (string, error) {
 		}
 		base = abs
 	}
+	base = filepath.Clean(base)
+	root := filepath.Clean(m.Cfg.StorageLocalRoot)
+	if !IsUnderAnyRoot(base, []string{root}) {
+		return "", ErrPathTraversal
+	}
 	return base, nil
 }
 
@@ -114,6 +121,11 @@ func (m *Manager) EncodeLocalConfig(basePath string) (string, error) {
 			return "", err
 		}
 		basePath = abs
+	}
+	basePath = filepath.Clean(basePath)
+	root := filepath.Clean(m.Cfg.StorageLocalRoot)
+	if !IsUnderAnyRoot(basePath, []string{root}) {
+		return "", ErrPathTraversal
 	}
 	return encodeConfig(LocalConfig{BasePath: basePath})
 }
@@ -174,6 +186,21 @@ func (m *Manager) ParseLocalConfig(raw string) LocalConfig {
 }
 
 func (m *Manager) ParseDriverConfig(driver, raw string) map[string]interface{} {
+	out := m.ParseDriverConfigUnmasked(driver, raw)
+	switch driver {
+	case "s3":
+		if v, ok := out["secret_key"].(string); ok && strings.TrimSpace(v) != "" {
+			out["secret_key"] = settings.SecretPlaceholder
+		}
+	case "ftp", "sftp", "webdav", "smb":
+		if v, ok := out["password"].(string); ok && strings.TrimSpace(v) != "" {
+			out["password"] = settings.SecretPlaceholder
+		}
+	}
+	return out
+}
+
+func (m *Manager) ParseDriverConfigUnmasked(driver, raw string) map[string]interface{} {
 	out := map[string]interface{}{}
 	switch driver {
 	case "local", "":

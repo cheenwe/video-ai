@@ -13,7 +13,7 @@ name="baseplatform-$target_os-$target_arch"
 stage="build/packages/$name"
 mkdir -p "$stage/frontend" release
 cp -R frontend/dist "$stage/frontend/"
-cp docs/部署.md "$stage/DEPLOY.md"
+cp docs/deployment.md "$stage/DEPLOY.md"
 binary=baseplatform
 if [[ "$target_os" == windows ]]; then
   binary=baseplatform.exe
@@ -23,6 +23,11 @@ else
   chmod +x "$stage/start.sh"
 fi
 (cd backend && CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -trimpath -ldflags='-s -w' -o "../$stage/$binary" ./cmd/baseplatform)
+# Guard: never ship signing private keys or raw .lic files in release packages.
+if find "$stage" \( -name 'private.pem' -o -name '*.lic' -o -path '*/keys/*' \) 2>/dev/null | grep -q .; then
+  echo 'Refusing to package private license material' >&2
+  exit 1
+fi
 if [[ "$target_os" == windows ]]; then
   archive="$name.zip"
   rm -f "release/$archive"

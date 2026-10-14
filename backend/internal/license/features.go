@@ -31,7 +31,7 @@ func EffectiveMaxUsers(meta Meta) int {
 		return DefaultCommunityMaxUsers
 	}
 	if meta.MaxUsers == 0 {
-		return 0 // 旗舰版不限
+		return 0 // 企业版/旗舰版不限
 	}
 	return ClampMaxUsers(meta.MaxUsers)
 }
@@ -47,16 +47,51 @@ func ClampMaxUsers(n int) int {
 	return n
 }
 
+// CanonicalEdition maps legacy aliases onto nextlicense editions.
+func CanonicalEdition(edition string) string {
+	switch strings.ToLower(strings.TrimSpace(edition)) {
+	case EditionTeam:
+		return EditionTeam
+	case EditionEnterprise, EditionFlagship:
+		return EditionEnterprise
+	case EditionCommunity, "":
+		return EditionCommunity
+	default:
+		return strings.ToLower(strings.TrimSpace(edition))
+	}
+}
+
+func IsCommercialEdition(edition string) bool {
+	switch CanonicalEdition(edition) {
+	case EditionTeam, EditionEnterprise:
+		return true
+	default:
+		return false
+	}
+}
+
 func NormalizePayload(payload *LicensePayload) {
 	if payload == nil {
 		return
 	}
 	edition := strings.TrimSpace(payload.Edition)
 	if edition == "" {
-		edition = EditionFlagship
+		edition = EditionEnterprise
 	}
-	payload.Edition = edition
+	// Preserve flagship label if that is what was issued historically; otherwise canonicalize.
+	if strings.EqualFold(edition, EditionFlagship) {
+		payload.Edition = EditionFlagship
+	} else {
+		payload.Edition = CanonicalEdition(edition)
+		if payload.Edition != EditionCommunity && payload.Edition != EditionTeam && payload.Edition != EditionEnterprise {
+			payload.Edition = edition
+		}
+	}
+	edition = CanonicalEdition(payload.Edition)
 
+	if payload.MaxUsers == 0 && edition == EditionTeam {
+		payload.MaxUsers = DefaultTeamMaxUsers
+	}
 	if payload.MaxUsers == 0 && edition == EditionCommunity {
 		payload.MaxUsers = DefaultCommunityMaxUsers
 	}
@@ -65,14 +100,17 @@ func NormalizePayload(payload *LicensePayload) {
 	}
 
 	if len(payload.Features) == 0 {
-		if edition == EditionFlagship {
-			payload.Features = append([]string{}, FlagshipDefaultFeatures...)
+		switch edition {
+		case EditionTeam:
+			payload.Features = append([]string{}, TeamDefaultFeatures...)
+		case EditionEnterprise:
+			payload.Features = append([]string{}, EnterpriseDefaultFeatures...)
 		}
 		return
 	}
 
-	if edition == EditionFlagship {
-		payload.Features = ensureFeatures(payload.Features, FlagshipDefaultFeatures)
+	if edition == EditionEnterprise {
+		payload.Features = ensureFeatures(payload.Features, EnterpriseDefaultFeatures)
 	}
 }
 
@@ -92,8 +130,10 @@ func ensureFeatures(current, defaults []string) []string {
 }
 
 func EditionLabel(edition string) string {
-	switch edition {
-	case EditionFlagship:
+	switch CanonicalEdition(edition) {
+	case EditionTeam:
+		return "团队版"
+	case EditionEnterprise:
 		return "旗舰版"
 	default:
 		return "社区版"
@@ -101,5 +141,5 @@ func EditionLabel(edition string) string {
 }
 
 func IsCommunityEdition(meta Meta) bool {
-	return !meta.Valid || meta.Edition == EditionCommunity || meta.Edition == ""
+	return !meta.Valid || CanonicalEdition(meta.Edition) == EditionCommunity || meta.Edition == ""
 }

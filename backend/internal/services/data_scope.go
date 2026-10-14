@@ -127,7 +127,8 @@ func (s *RBACService) ApplyDataScope(db *gorm.DB, user models.User, opts ScopeOp
 					predicates = predicates.Or(opts.ProjectIDColumn+" IN ?", projects)
 				}
 			}
-			// custom scope has no configured membership table; it grants nothing.
+		case models.DataScopeCustom:
+			// 未实现自定义部门成员表；显式忽略，保持 fail-closed（不扩大权限）。
 		}
 	}
 	return db.Where(predicates)

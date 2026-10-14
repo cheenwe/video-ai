@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"baseplatform/internal/middleware"
 	"baseplatform/internal/models"
 	"baseplatform/internal/response"
+	"baseplatform/internal/security"
 	"baseplatform/internal/services"
 )
 
@@ -145,6 +145,10 @@ func (h *WebhookHandler) Create(c *gin.Context) {
 		return
 	}
 	if !validWebhookURL(req.URL) || strings.TrimSpace(req.Name) == "" {
+		if err := security.ValidatePublicHTTPURL(req.URL); err != nil && strings.TrimSpace(req.URL) != "" {
+			response.BizFail(c, "Webhook URL 无效: "+err.Error(), 422)
+			return
+		}
 		response.BizFail(c, "名称或HTTP(S)地址无效", 422)
 		return
 	}
@@ -196,6 +200,10 @@ func (h *WebhookHandler) Update(c *gin.Context) {
 	}
 	if req.URL != nil {
 		if !validWebhookURL(*req.URL) {
+			if err := security.ValidatePublicHTTPURL(*req.URL); err != nil {
+				response.BizFail(c, "Webhook URL 无效: "+err.Error(), 422)
+				return
+			}
 			response.BizFail(c, "HTTP(S)地址无效", 422)
 			return
 		}
@@ -322,6 +330,5 @@ func splitTypes(s string) []string {
 }
 
 func validWebhookURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil && u.Fragment == ""
+	return security.ValidatePublicHTTPURL(raw) == nil && strings.TrimSpace(raw) != ""
 }

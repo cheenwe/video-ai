@@ -179,7 +179,8 @@ func (u User) IsLDAPAuth() bool {
 	return u.AuthSource == AuthSourceLDAP
 }
 
-// SystemUsernames 系统内置账号：不可删除、不可改角色。
+// SystemUsernames 保留用户名：不可删除、不可改角色（即使当前未自动创建）。
+// guest / superadmin 为历史兼容保留名，防止业务账号占用；首次启动只创建 admin。
 var SystemUsernames = map[string]struct{}{
 	"admin":      {},
 	"guest":      {},

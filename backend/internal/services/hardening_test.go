@@ -68,6 +68,7 @@ func TestBackupRecoveryIsolatedAndChecksummed(t *testing.T) {
 	}
 }
 func TestDurableNotificationsAndStableRetries(t *testing.T) {
+	t.Setenv("BASE_WEBHOOK_ALLOW_PRIVATE", "1")
 	db, _ := testDB(t)
 	u := models.User{Username: "recipient", Role: "admin", PasswordHash: "test"}
 	db.Create(&u)

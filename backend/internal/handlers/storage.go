@@ -8,6 +8,7 @@ import (
 	"baseplatform/internal/models"
 	"baseplatform/internal/response"
 	"baseplatform/internal/services"
+	"baseplatform/internal/settings"
 	"baseplatform/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -251,6 +252,16 @@ func (h *StorageHandler) Delete(c *gin.Context) {
 func encodeStorageConfig(h *StorageHandler, driver string, raw map[string]interface{}, existing string) (string, error) {
 	if services.IsCloudStorageDriver(driver) {
 		return services.MergeCloudStorageConfig(driver, raw, existing)
+	}
+	if raw != nil && existing != "" {
+		prev := h.Manager.ParseDriverConfigUnmasked(driver, existing)
+		for _, key := range []string{"password", "secret_key"} {
+			if v, ok := raw[key].(string); ok && settings.IsSecretPlaceholder(v) {
+				if old, ok := prev[key].(string); ok {
+					raw[key] = old
+				}
+			}
+		}
 	}
 	return h.Manager.EncodeDriverConfig(driver, raw)
 }

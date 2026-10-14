@@ -7,12 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"baseplatform/internal/storage"
 )
 
 const maxAvatarBytes = 2 << 20 // 2MB
 
-var allowedExt = map[string]bool{
-	".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true, ".svg": true,
+// 用户上传仅允许位图；内置预设仍可使用 SVG。
+var allowedUploadExt = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true,
 }
 
 type Service struct {
@@ -74,8 +77,8 @@ func (s *Service) IsPresetURL(url string) bool {
 
 func (s *Service) SaveUpload(kind string, id uint, file multipart.File, header *multipart.FileHeader) (string, error) {
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if !allowedExt[ext] {
-		return "", fmt.Errorf("仅支持 jpg、png、webp、gif、svg")
+	if !allowedUploadExt[ext] {
+		return "", fmt.Errorf("仅支持 jpg、png、webp、gif")
 	}
 	if header.Size > maxAvatarBytes {
 		return "", fmt.Errorf("头像不能超过 2MB")
@@ -91,9 +94,14 @@ func (s *Service) SaveUpload(kind string, id uint, file multipart.File, header *
 		return "", err
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, file); err != nil {
+	written, err := io.Copy(out, io.LimitReader(file, maxAvatarBytes+1))
+	if err != nil {
 		os.Remove(dest)
 		return "", err
+	}
+	if written > maxAvatarBytes {
+		os.Remove(dest)
+		return "", fmt.Errorf("头像不能超过 2MB")
 	}
 	return s.fileURL(kind, id, ext), nil
 }
@@ -125,7 +133,14 @@ func (s *Service) fileURL(kind string, id uint, ext string) string {
 }
 
 func (s *Service) ServeAvatar(c_path string) (string, error) {
-	full := filepath.Join(s.Root, filepath.Clean(filepath.FromSlash(c_path)))
+	clean := filepath.Clean(filepath.FromSlash(c_path))
+	if clean == "." || strings.HasPrefix(clean, "..") {
+		return "", os.ErrNotExist
+	}
+	full := filepath.Join(s.Root, clean)
+	if !storage.IsUnderAnyRoot(full, []string{s.Root}) {
+		return "", os.ErrNotExist
+	}
 	if _, err := os.Stat(full); err != nil {
 		return "", err
 	}

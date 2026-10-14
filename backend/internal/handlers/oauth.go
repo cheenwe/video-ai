@@ -119,7 +119,7 @@ func (h *OAuthHandler) AdminList(c *gin.Context) {
 	cfg := settings.LoadOAuth(h.DB)
 	me := middleware.CurrentUser(c)
 	services.LogAction(h.DB, c, "audit", "success", "settings.oauth.view", &me, "")
-	response.OK(c, cfg, "")
+	response.OK(c, settings.RedactOAuth(cfg), "")
 }
 
 // AdminSave 保存 OAuth 配置。
@@ -141,10 +141,11 @@ func (h *OAuthHandler) AdminSave(c *gin.Context) {
 		}
 	}
 	me := middleware.CurrentUser(c)
+	cfg = settings.MergeOAuthSecrets(cfg, settings.LoadOAuth(h.DB))
 	if err := settings.SaveSection(h.DB, "oauth", cfg, &me.ID); err != nil {
 		response.BizFail(c, "保存失败", 500)
 		return
 	}
 	services.LogAction(h.DB, c, "audit", "success", "settings.oauth.save", &me, "")
-	response.OK(c, cfg, "已保存")
+	response.OK(c, settings.RedactOAuth(cfg), "已保存")
 }

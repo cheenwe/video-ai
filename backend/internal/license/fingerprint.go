@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// FingerprintVersion identifies this product line to nextlicense (VA1 = baseplatform).
 const FingerprintVersion = "VA1"
 
 // MachineInfo describes how the deployment fingerprint was derived (no secrets).
@@ -78,7 +79,8 @@ func normalizeMachineID(id string) string {
 	if id == "" {
 		return id
 	}
-	if strings.HasPrefix(id, FingerprintVersion+"-") {
+	upper := strings.ToUpper(id)
+	if strings.HasPrefix(upper, FingerprintVersion+"-") {
 		return id
 	}
 	return FingerprintVersion + "-M-" + id

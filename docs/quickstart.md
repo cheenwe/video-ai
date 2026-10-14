@@ -32,12 +32,10 @@ npm run dev
 
 ```sh
 cd backend
-# 可选：自定义首次管理员密码；未设置时默认 ChangeMe123
-export BASE_ADMIN_PASSWORD='你的密码'
 go run ./cmd/baseplatform
 ```
 
-后端默认监听 <http://127.0.0.1:8181>。
+后端默认监听 <http://127.0.0.1:8181>。如想自定义首次管理员密码，可先设置 `BASE_ADMIN_PASSWORD`（未设置时默认 `ChangeMe123`）：
 
 ### 4. 登录
 
@@ -82,4 +80,4 @@ make docker-up     # Docker Compose 构建并启动
 - `session.key` — 会话签名密钥（未设置 `BASE_SECRET_KEY` 时自动生成）
 - `avatars/`、`storage/`、`backups/` 等
 
-生产环境请设置固定的绝对路径 `BASE_DATA_DIR`，并纳入备份策略。详见 [环境变量](环境变量.md) 与 [运维与备份](运维与备份.md)。
+生产环境请设置固定的绝对路径 `BASE_DATA_DIR`，并纳入备份策略。详见 [环境变量](environment.md) 与 [运维与备份](ops-backup.md)。

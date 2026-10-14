@@ -77,12 +77,20 @@ MySQL/PostgreSQL 备份依赖 `mysqldump` / `pg_dump`（可通过 `BASE_DB_DUMP_
 
 历史弱密码或多余账号须通过用户管理流程治理，启动逻辑**不会**重置已有账号密码。
 
+## 网络安全加固要点
+
+- Webhook 禁止指向本机/内网/云元数据（防 SSRF）；开发测试可设 `BASE_WEBHOOK_ALLOW_PRIVATE=1`。
+- 本地存储 `base_path` 必须位于数据目录下的 `storage/` 内。
+- 邮件/LDAP/OAuth/云盘/存储密钥在 API 回显中脱敏；保存时占位符不覆盖原密钥。
+- 验证码按 IP 限流；TOTP 完成前不清除登录失败锁定。
+- 管理员创建用户或重置密码后，目标账号强制改密。
+
 ## 健康检查
 
 | 端点 | 用途 |
 | --- | --- |
 | `/api/health/live` | 存活探测（Docker HEALTHCHECK 使用） |
-| `/api/health` | 含数据库、磁盘等综合状态 |
+| `/api/health` | 含数据库、磁盘等综合状态（不向外泄露数据库错误细节） |
 
 ## 其他
 

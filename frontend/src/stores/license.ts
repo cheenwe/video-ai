@@ -8,6 +8,8 @@ declare const __APP_VERSION__: string
 
 const EDITION_LABELS: Record<string, string> = {
   community: '社区版',
+  team: '团队版',
+  enterprise: '旗舰版',
   flagship: '旗舰版',
 }
 
@@ -24,13 +26,24 @@ export const useLicenseStore = defineStore('license', () => {
   })
   const watermark = computed<WatermarkInfo | null>(() => normalizeWatermarkInfo(siteInfo.value?.watermark))
 
-  const isCommunity = computed(() => edition.value === 'community')
-  const isFlagship = computed(() => edition.value === 'flagship' && license.value.valid)
+  const isCommunity = computed(() => {
+    const ed = edition.value
+    return ed === 'community' || ed === ''
+  })
+  const isCommercial = computed(() => {
+    if (!license.value.valid) return false
+    return edition.value === 'team' || edition.value === 'enterprise' || edition.value === 'flagship'
+  })
+  /** @deprecated use isCommercial — kept for older panels */
+  const isFlagship = computed(() => isCommercial.value && edition.value !== 'team')
 
   const editionLabel = computed(() => EDITION_LABELS[edition.value] || '社区版')
 
   const editionBadgeClass = computed(() => {
     switch (edition.value) {
+      case 'team':
+        return 'bg-azure-lt text-azure'
+      case 'enterprise':
       case 'flagship':
         return 'bg-primary-lt text-primary'
       default:
@@ -78,6 +91,7 @@ export const useLicenseStore = defineStore('license', () => {
     license,
     watermark,
     isCommunity,
+    isCommercial,
     isFlagship,
     editionLabel,
     editionBadgeClass,

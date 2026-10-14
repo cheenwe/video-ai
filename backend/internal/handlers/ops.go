@@ -54,6 +54,8 @@ func (h *OpsHandler) Download(c *gin.Context) {
 	me := middleware.CurrentUser(c)
 	services.LogAction(h.DB, c, "audit", "success", "ops.backup.download", &me, id)
 	c.Header("Content-Disposition", "attachment; filename=baseplatform-"+id+".tar.gz")
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
 	c.File(path)
 }
 

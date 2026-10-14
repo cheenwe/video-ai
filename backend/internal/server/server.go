@@ -68,6 +68,7 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 		return nil, err
 	}
 	schedMgr := scheduler.NewManager(db, cfg, backupSvc, ldapAuth)
+	license.InitPublicKey(cfg.DataHome)
 	licSvc := license.NewService(db, "1.0.0")
 	upgradeSvc := upgrade.NewService(db, licSvc, "0.1.0")
 	middleware.SetLicenseService(licSvc)
@@ -77,7 +78,7 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	notifSvc := services.NewNotificationService(db, eventBus)
 
 	// --- Handlers ---
-	auth := &handlers.AuthHandler{DB: db, Cfg: cfg, Limiter: services.NewSecurityLoginLimiter(db), Captcha: captchaStore, LDAP: ldapAuth}
+	auth := &handlers.AuthHandler{DB: db, Cfg: cfg, Limiter: services.NewSecurityLoginLimiter(db), Captcha: captchaStore, CaptchaLimiter: services.NewIPRateLimiter(20, time.Minute), LDAP: ldapAuth}
 	p := &handlers.PlatformHandler{DB: db, Started: time.Now(), LDAPSvc: ldapAuth, Mailer: mailer, Cfg: cfg, Version: "1.0.0"}
 	u := &handlers.UserHandler{DB: db}
 	d := &handlers.DepartmentHandler{DB: db}

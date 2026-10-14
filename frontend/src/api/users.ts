@@ -6,6 +6,7 @@ export interface UserRow {
   email?: string | null
   role: string
   disabled: number
+  web_login_enabled?: boolean
   real_name: string | null
   department_id?: number | null
   department_name?: string
@@ -36,6 +37,7 @@ export function createUser(data: {
   real_name?: string
   department_id?: number | null
   timezone?: string
+  web_login_enabled?: boolean
 }) {
   return request<UserRow>('/api/users', { method: 'POST', body: JSON.stringify(data) })
 }
@@ -50,6 +52,7 @@ export function updateUser(
     department_id: number | null
     new_password: string
     timezone: string
+    web_login_enabled: boolean
   }>,
 ) {
   return request<UserRow>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(data) })

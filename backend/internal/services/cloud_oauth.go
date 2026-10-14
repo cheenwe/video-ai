@@ -112,10 +112,10 @@ func (s *CloudOAuthService) oauthConfig(app *settings.CloudStorageApp, redirectU
 	}
 }
 
-// CloudOAuthRedirectURI 生成云盘 OAuth 回调地址。
+// CloudOAuthRedirectURI 生成云盘 OAuth 回调地址（须与公开路由一致）。
 func CloudOAuthRedirectURI(baseURL, platform string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
-	return baseURL + "/api/storages/cloud-oauth/" + url.PathEscape(platform) + "/callback"
+	return baseURL + "/api/storage/cloud/callback/" + url.PathEscape(platform)
 }
 
 // BuildAuthURL 构建云盘授权 URL。state 中携带 storageID/platform/redirectURI 并签名。

@@ -3,28 +3,42 @@ package license
 import "time"
 
 const (
-	EditionCommunity = "community"
-	EditionFlagship  = "flagship"
+	EditionCommunity  = "community"
+	EditionTeam       = "team"
+	EditionEnterprise = "enterprise"
+	// EditionFlagship is a legacy alias for enterprise (kept for older .lic / UI copy).
+	EditionFlagship = "flagship"
 )
 
 const (
 	DefaultCommunityMaxUsers = 5
-	MinLicensedMaxUsers      = 3 // 内置 admin/superadmin/guest 至少占 3 个席位
+	DefaultTeamMaxUsers      = 15
+	// 授权文件声明的用户上限下限；运行时仅自动创建一个 admin（superadmin 角色）。
+	MinLicensedMaxUsers = 1
 )
 
 const (
 	FeatureBrandingCustom = "branding_custom"
-	FeatureWatermark       = "watermark"
-	FeatureGateway         = "gateway"
-	FeatureStorageSync     = "storage_sync"
-	FeatureAdminTOTP       = "admin_totp"
-	FeatureSSO             = "sso"
-	FeatureOps             = "ops"
-	FeatureExtensions      = "extensions"
-	FeatureOnlineUpgrade   = "online_upgrade"
+	FeatureWatermark      = "watermark"
+	FeatureGateway        = "gateway"
+	FeatureStorageSync    = "storage_sync"
+	FeatureAdminTOTP      = "admin_totp"
+	FeatureSSO            = "sso"
+	FeatureOps            = "ops"
+	FeatureExtensions     = "extensions"
+	FeatureOnlineUpgrade  = "online_upgrade"
+	FeatureLoginCaptcha   = "login_captcha"
 )
 
-var FlagshipDefaultFeatures = []string{
+// TeamDefaultFeatures aligns with nextlicense team defaults that this product consumes.
+var TeamDefaultFeatures = []string{
+	FeatureLoginCaptcha,
+	FeatureOnlineUpgrade,
+	FeatureAdminTOTP,
+}
+
+// EnterpriseDefaultFeatures (and legacy flagship) unlock commercial capabilities.
+var EnterpriseDefaultFeatures = []string{
 	FeatureBrandingCustom,
 	FeatureWatermark,
 	FeatureGateway,
@@ -34,20 +48,25 @@ var FlagshipDefaultFeatures = []string{
 	FeatureOps,
 	FeatureExtensions,
 	FeatureOnlineUpgrade,
+	FeatureLoginCaptcha,
 }
 
+// FlagshipDefaultFeatures keeps the historical name used by older code paths.
+var FlagshipDefaultFeatures = EnterpriseDefaultFeatures
+
 type LicensePayload struct {
-	LicenseID     string    `json:"license_id"`
-	CustomerName  string    `json:"customer_name"`
-	Edition       string    `json:"edition"`
-	Features      []string  `json:"features"`
-	MaxUsers      int       `json:"max_users"`
-	MaxInstances  int       `json:"max_instances"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	MachineID     string    `json:"machine_id,omitempty"`
-	BindingMode   string    `json:"binding_mode,omitempty"`
-	IssuedAt      time.Time `json:"issued_at"`
-	Nonce         string    `json:"nonce,omitempty"`
+	LicenseID    string    `json:"license_id"`
+	CustomerName string    `json:"customer_name"`
+	Product      string    `json:"product,omitempty"`
+	Edition      string    `json:"edition"`
+	Features     []string  `json:"features"`
+	MaxUsers     int       `json:"max_users"`
+	MaxInstances int       `json:"max_instances"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	MachineID    string    `json:"machine_id,omitempty"`
+	BindingMode  string    `json:"binding_mode,omitempty"`
+	IssuedAt     time.Time `json:"issued_at"`
+	Nonce        string    `json:"nonce,omitempty"`
 }
 
 type SignedLicense struct {

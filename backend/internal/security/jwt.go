@@ -1,6 +1,7 @@
 package security
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -45,11 +46,7 @@ func createToken(secret, algorithm string, expireMinutes int, userID uint, usern
 	}
 	method := jwt.SigningMethodHS256
 	if algorithm != "" && algorithm != "HS256" {
-		if m := jwt.GetSigningMethod(algorithm); m != nil {
-			token := jwt.NewWithClaims(m, claims)
-			signed, err := token.SignedString([]byte(secret))
-			return signed, jti, err
-		}
+		return "", "", fmt.Errorf("仅支持 HS256 签名算法")
 	}
 	token := jwt.NewWithClaims(method, claims)
 	signed, err := token.SignedString([]byte(secret))
@@ -57,9 +54,18 @@ func createToken(secret, algorithm string, expireMinutes int, userID uint, usern
 }
 
 func ParseToken(secret, algorithm, tokenStr string) (*Claims, error) {
+	if algorithm == "" {
+		algorithm = "HS256"
+	}
+	if algorithm != "HS256" {
+		return nil, fmt.Errorf("仅支持 HS256 签名算法")
+	}
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, fmt.Errorf("意外的签名方法")
+		}
 		return []byte(secret), nil
-	}, jwt.WithValidMethods([]string{algorithm}))
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return nil, err
 	}

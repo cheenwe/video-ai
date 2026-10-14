@@ -43,16 +43,16 @@ func seatProtected(u models.User) bool {
 	return u.IsSystemUser()
 }
 
-// EnsureSystemAccountsEnabled re-enables built-in admin accounts wrongly disabled by seat reconcile.
+// EnsureSystemAccountsEnabled re-enables the bootstrap admin if wrongly disabled by seat reconcile.
 func EnsureSystemAccountsEnabled(db *gorm.DB) error {
 	return db.Model(&models.User{}).
-		Where("username IN ?", []string{"admin", "superadmin"}).
+		Where("username = ?", "admin").
 		Where("disabled = ?", 1).
 		Update("disabled", 0).Error
 }
 
 // ReconcileUserSeats disables least-recently-used enabled users until within limit.
-// System accounts (admin / superadmin / guest) are never auto-disabled.
+// System usernames and superadmin role accounts are never auto-disabled.
 func ReconcileUserSeats(db *gorm.DB, meta Meta) (int, error) {
 	_ = EnsureSystemAccountsEnabled(db)
 

@@ -1,6 +1,6 @@
 # 部署
 
-本文说明 Docker Compose、离线二进制包与 CI 构建。环境变量详见 [环境变量](环境变量.md)。
+本文说明 Docker Compose、离线二进制包与 CI 构建。环境变量详见 [环境变量](environment.md)。
 
 ## Docker Compose
 
@@ -113,4 +113,4 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 1. 升级前在运维中心备份，或停服复制完整 `BASE_DATA_DIR`。
 2. 替换二进制或重新 `docker compose up -d --build`。
 3. 保留原数据目录与 `session.key`；不要混用不同实例的数据。
-4. SQLite 恢复须停服并将 `BASE_DATA_DIR` 指向已验证的恢复目录，见 [运维与备份](运维与备份.md)。
+4. SQLite 恢复须停服并将 `BASE_DATA_DIR` 指向已验证的恢复目录，见 [运维与备份](ops-backup.md)。

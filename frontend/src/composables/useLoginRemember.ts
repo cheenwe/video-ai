@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'va_login_remember'
+const STORAGE_KEY = 'baseplatform_login_remember'
 
 export interface SavedLogin {
   username: string

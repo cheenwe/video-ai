@@ -1,6 +1,6 @@
 import { ref, watch } from 'vue'
 
-const STORAGE_KEY = 'va_sidebar_collapsed'
+const STORAGE_KEY = 'baseplatform_sidebar_collapsed'
 
 const collapsed = ref(localStorage.getItem(STORAGE_KEY) === '1')
 /** 小屏抽屉导航是否打开 */

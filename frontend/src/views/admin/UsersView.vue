@@ -40,12 +40,14 @@ const form = ref({
   role: "user",
   real_name: "",
   department_id: "" as string | number,
+  web_login_enabled: true,
 });
 const editForm = ref({
   email: "",
   role: "user",
   real_name: "",
   department_id: "" as string | number,
+  web_login_enabled: true,
 });
 const changePasswordForm = ref({ new_password: "", new_password2: "" });
 
@@ -137,6 +139,7 @@ function resetCreateForm() {
     role: "user",
     real_name: "",
     department_id: "",
+    web_login_enabled: true,
   };
   createTouched.value = { username: false, email: false, password: false };
   cfCreateValues.value = {};
@@ -381,6 +384,7 @@ async function create() {
       department_id: form.value.department_id
         ? Number(form.value.department_id)
         : null,
+      web_login_enabled: form.value.web_login_enabled,
     });
     // 自定义字段保存失败不回滚用户，仅提示
     await saveCfAfterCreate(created.id);
@@ -402,6 +406,7 @@ async function openEdit(u: UserRow) {
     role: u.role,
     real_name: u.real_name || "",
     department_id: u.department_id ?? "",
+    web_login_enabled: u.web_login_enabled !== false,
   };
   editTouched.value = { email: false };
   showEdit.value = true;
@@ -482,6 +487,7 @@ async function saveEdit() {
       department_id: editForm.value.department_id
         ? Number(editForm.value.department_id)
         : 0,
+      web_login_enabled: editForm.value.web_login_enabled,
     };
     if (!editing.value.is_system) {
       payload.role = editForm.value.role;
@@ -565,7 +571,11 @@ onMounted(async () => {
                 <span class="badge bg-secondary-lt">{{ u.role }}</span>
               </td>
               <td>{{ u.department_name || "—" }}</td>
-              <td>{{ u.disabled ? "禁用" : "正常" }}</td>
+              <td>
+                <span v-if="u.disabled">禁用</span>
+                <span v-else-if="u.web_login_enabled === false">正常 · 仅 API</span>
+                <span v-else>正常</span>
+              </td>
               <td>{{ u.real_name || "—" }}</td>
               <td v-for="f in cfDefs" :key="f.id" class="small">
                 {{ cfCellText(u.id, f.id) }}
@@ -756,6 +766,13 @@ onMounted(async () => {
               <label class="form-label">显示名</label>
               <input v-model="form.real_name" class="form-control" />
             </div>
+            <div class="col-12">
+              <label class="form-check">
+                <input v-model="form.web_login_enabled" class="form-check-input" type="checkbox" />
+                <span class="form-check-label">允许 Web 登录</span>
+              </label>
+              <div class="form-hint">关闭后仍可通过个人访问令牌调用 API，但不能使用登录页。</div>
+            </div>
           </div>
 
           <!-- 自定义字段 -->
@@ -923,6 +940,18 @@ onMounted(async () => {
           <div class="mb-2">
             <label class="form-label">显示名</label
             ><input v-model="editForm.real_name" class="form-control" />
+          </div>
+          <div class="mb-2">
+            <label class="form-check">
+              <input
+                v-model="editForm.web_login_enabled"
+                class="form-check-input"
+                type="checkbox"
+                :disabled="editing?.username === 'admin' || editing?.id === auth.user?.user_id"
+              />
+              <span class="form-check-label">允许 Web 登录</span>
+            </label>
+            <div class="form-hint">关闭后仍可使用个人访问令牌；初始管理员与本人不可关闭。</div>
           </div>
 
           <!-- 自定义字段 -->
