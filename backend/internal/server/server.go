@@ -15,6 +15,7 @@ import (
 	"baseplatform/internal/services"
 	"baseplatform/internal/storage"
 	"baseplatform/internal/upgrade"
+	"baseplatform/internal/videoai"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -24,6 +25,7 @@ type Application struct {
 	Router        *gin.Engine
 	Scheduler     *scheduler.Manager
 	Notifications *services.NotificationService
+	VideoAI       *videoai.Manager
 }
 
 func (a *Application) Start() error {
@@ -32,9 +34,18 @@ func (a *Application) Start() error {
 		return err
 	}
 	a.Notifications.Start()
+	if a.VideoAI != nil {
+		a.VideoAI.Start()
+	}
 	return nil
 }
-func (a *Application) Stop() { a.Scheduler.Stop(); a.Notifications.Stop() }
+func (a *Application) Stop() {
+	if a.VideoAI != nil {
+		a.VideoAI.Stop()
+	}
+	a.Scheduler.Stop()
+	a.Notifications.Stop()
+}
 
 // New builds routes without starting background workers (used by API tests).
 func New(cfg *config.Config, db *gorm.DB, frontend string) *gin.Engine {
@@ -103,6 +114,17 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	rbacSvc := services.NewRBACService(db)
 	rbac := &handlers.RBACHandler{DB: db, RBAC: rbacSvc}
 	project := &handlers.ProjectHandler{DB: db, RBAC: rbacSvc}
+	nvrH := &handlers.NVRHandler{DB: db, Cfg: cfg, RBAC: rbacSvc}
+	videoRuntime := videoai.NewManager(db, cfg.DataHome, eventBus)
+	camH := &handlers.CameraHandler{DB: db, RBAC: rbacSvc}
+	boundH := &handlers.BoundaryHandler{DB: db}
+	deployH := &handlers.DeploymentHandler{DB: db, Runtime: videoRuntime, RBAC: rbacSvc}
+	algoH := &handlers.AlgorithmHandler{DB: db}
+	eventH := &handlers.EventHandler{DB: db, RBAC: rbacSvc}
+	reportH := &handlers.ReportHandler{DB: db}
+	accessH := &handlers.AccessHandler{DB: db}
+	recPlanH := &handlers.RecordingPlanHandler{DB: db}
+	videoOpsH := &handlers.VideoOpsHandler{DB: db, DataHome: cfg.DataHome, Runtime: videoRuntime}
 
 	// --- Public routes ---
 	r.GET("/api/health", p.Health)
@@ -247,6 +269,79 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	admin.DELETE("/webhooks/:id", middleware.RequirePermission(db, "webhook:delete"), webhook.Delete)
 	admin.GET("/webhooks/:id/deliveries", middleware.RequirePermission(db, "webhook:list"), webhook.Deliveries)
 	admin.POST("/webhooks/deliveries/:id/retry", middleware.RequirePermission(db, "webhook:update"), webhook.Retry)
+	// Video surveillance: nvr-agent nodes and proxied camera features
+	admin.GET("/nvr/agents", middleware.RequirePermission(db, "nvr:list"), nvrH.List)
+	admin.POST("/nvr/agents", middleware.RequirePermission(db, "nvr:create"), nvrH.Create)
+	admin.POST("/nvr/agents/test", middleware.RequirePermission(db, "nvr:create"), nvrH.TestDraft)
+	admin.PUT("/nvr/agents/:id", middleware.RequirePermission(db, "nvr:update"), nvrH.Update)
+	admin.DELETE("/nvr/agents/:id", middleware.RequirePermission(db, "nvr:delete"), nvrH.Delete)
+	admin.POST("/nvr/agents/:id/test", middleware.RequirePermission(db, "nvr:list"), nvrH.Test)
+	admin.GET("/nvr/agents/:id/config", middleware.RequirePermission(db, "nvr:config"), nvrH.GetConfig)
+	admin.PUT("/nvr/agents/:id/config", middleware.RequirePermission(db, "nvr:config"), nvrH.SaveConfig)
+	admin.POST("/nvr/agents/:id/debug/nvr", middleware.RequirePermission(db, "nvr:config"), nvrH.DebugNVR)
+	admin.POST("/nvr/agents/:id/debug/stream", middleware.RequirePermission(db, "nvr:config"), nvrH.DebugStream)
+	admin.GET("/nvr/cameras", middleware.RequirePermission(db, "camera:list"), nvrH.Cameras)
+	admin.GET("/nvr/agents/:id/status", middleware.RequirePermission(db, "camera:list"), nvrH.Status)
+	admin.POST("/nvr/agents/:id/cameras/:cam/record/:action", middleware.RequirePermission(db, "camera:record"), nvrH.RecordControl)
+	admin.GET("/nvr/agents/:id/cameras/:cam/recordings", middleware.RequirePermission(db, "recording:list"), nvrH.Recordings)
+	admin.GET("/nvr/agents/:id/cameras/:cam/archive", middleware.RequirePermission(db, "recording:list"), nvrH.ArchiveStatus)
+	admin.GET("/nvr/agents/:id/cameras/:cam/archive/search", middleware.RequirePermission(db, "recording:list"), nvrH.ArchiveSearch)
+	admin.POST("/nvr/agents/:id/cameras/:cam/archive", middleware.RequirePermission(db, "camera:record"), nvrH.ArchiveStart)
+	admin.GET("/nvr/agents/:id/live/:cam/:file", middleware.RequirePermission(db, "camera:live"), nvrH.Live)
+	admin.GET("/nvr/agents/:id/recordings/:cam/:file", middleware.RequirePermission(db, "recording:list"), nvrH.RecordingFile)
+
+	// Platform cameras & video AI (M1–M6)
+	admin.GET("/cameras/groups", middleware.RequirePermission(db, "camera:list"), camH.ListGroups)
+	admin.POST("/cameras/groups", middleware.RequirePermission(db, "camera:create"), camH.CreateGroup)
+	admin.PUT("/cameras/groups/:id", middleware.RequirePermission(db, "camera:update"), camH.UpdateGroup)
+	admin.DELETE("/cameras/groups/:id", middleware.RequirePermission(db, "camera:delete"), camH.DeleteGroup)
+	admin.GET("/cameras", middleware.RequirePermission(db, "camera:list"), camH.List)
+	admin.POST("/cameras", middleware.RequirePermission(db, "camera:create"), camH.Create)
+	admin.GET("/cameras/:id", middleware.RequirePermission(db, "camera:list"), camH.Get)
+	admin.PUT("/cameras/:id", middleware.RequirePermission(db, "camera:update"), camH.Update)
+	admin.DELETE("/cameras/:id", middleware.RequirePermission(db, "camera:delete"), camH.Delete)
+	admin.POST("/cameras/sync-nvr/:agentId", middleware.RequirePermission(db, "camera:create"), camH.SyncFromNVR)
+
+	admin.GET("/boundaries", middleware.RequirePermission(db, "boundary:list"), boundH.List)
+	admin.GET("/boundaries/candidate", middleware.RequirePermission(db, "boundary:edit"), boundH.Candidate)
+	admin.POST("/boundaries", middleware.RequirePermission(db, "boundary:edit"), boundH.Create)
+	admin.POST("/boundaries/:id/publish", middleware.RequirePermission(db, "boundary:publish"), boundH.Publish)
+	admin.POST("/boundaries/:id/rollback", middleware.RequirePermission(db, "boundary:edit"), boundH.Rollback)
+
+	admin.GET("/algorithms/models", middleware.RequirePermission(db, "algorithm:list"), algoH.ListModels)
+	admin.GET("/algorithms/rules", middleware.RequirePermission(db, "algorithm:list"), algoH.ListRules)
+	admin.GET("/algorithms/templates", middleware.RequirePermission(db, "algorithm:list"), algoH.ListTemplates)
+	admin.POST("/algorithms/model-versions", middleware.RequirePermission(db, "algorithm:publish"), algoH.CreateModelVersion)
+	admin.POST("/algorithms/model-versions/:id/publish", middleware.RequirePermission(db, "algorithm:publish"), algoH.PublishModelVersion)
+	admin.POST("/algorithms/model-versions/:id/self-check", middleware.RequirePermission(db, "algorithm:list"), algoH.SelfCheckModel)
+
+	admin.GET("/deployments", middleware.RequirePermission(db, "deployment:list"), deployH.List)
+	admin.POST("/deployments", middleware.RequirePermission(db, "deployment:edit"), deployH.Create)
+	admin.PUT("/deployments/:id", middleware.RequirePermission(db, "deployment:edit"), deployH.Update)
+	admin.POST("/deployments/:id/self-check", middleware.RequirePermission(db, "deployment:list"), deployH.SelfCheck)
+	admin.POST("/deployments/:id/start", middleware.RequirePermission(db, "deployment:control"), deployH.Start)
+	admin.POST("/deployments/:id/stop", middleware.RequirePermission(db, "deployment:control"), deployH.Stop)
+	admin.POST("/deployments/:id/pause", middleware.RequirePermission(db, "deployment:control"), deployH.Pause)
+
+	admin.GET("/events", middleware.RequirePermission(db, "event:list"), eventH.List)
+	admin.POST("/events/batch-confirm", middleware.RequirePermission(db, "event:handle"), eventH.BatchConfirm)
+	admin.GET("/events/:id", middleware.RequirePermission(db, "event:list"), eventH.Get)
+	admin.GET("/events/:id/evidences/:eid/file", middleware.RequirePermission(db, "event:list"), eventH.DownloadEvidence)
+	admin.POST("/events/:id/actions", middleware.RequirePermission(db, "event:handle"), eventH.Act)
+
+	admin.GET("/reports/summary", middleware.RequirePermission(db, "report:list"), reportH.Summary)
+	admin.GET("/reports/runtime", middleware.RequirePermission(db, "report:list"), reportH.RuntimeMetrics)
+
+	admin.GET("/access-devices", middleware.RequirePermission(db, "access:list"), accessH.List)
+	admin.POST("/access-devices", middleware.RequirePermission(db, "access:edit"), accessH.Create)
+	admin.PUT("/access-devices/:id", middleware.RequirePermission(db, "access:edit"), accessH.Update)
+	admin.DELETE("/access-devices/:id", middleware.RequirePermission(db, "access:edit"), accessH.Delete)
+	admin.POST("/access-devices/:id/probe", middleware.RequirePermission(db, "access:edit"), accessH.Probe)
+
+	admin.GET("/recording-plans/:cameraId", middleware.RequirePermission(db, "recording:list"), recPlanH.Get)
+	admin.PUT("/recording-plans/:cameraId", middleware.RequirePermission(db, "camera:record"), recPlanH.Save)
+	admin.GET("/video/self-check", middleware.RequirePermission(db, "overview:list"), videoOpsH.SelfCheck)
+
 	admin.GET("/admin/overview", middleware.RequirePermission(db, "overview:list"), p.Overview)
 	admin.PUT("/site/branding", middleware.RequirePermission(db, "settings:general"), p.SaveBranding)
 	admin.GET("/admin/settings/general", middleware.RequirePermission(db, "settings:general"), p.General)
@@ -359,5 +454,5 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 			r.GET("/", func(c *gin.Context) { c.File(filepath.Join(frontend, "index.html")) })
 		}
 	}
-	return &Application{r, schedMgr, notifSvc}, nil
+	return &Application{Router: r, Scheduler: schedMgr, Notifications: notifSvc, VideoAI: videoRuntime}, nil
 }

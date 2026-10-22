@@ -108,6 +108,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 或使用 `make build` / `make package`。
 
+## 海康 NVR 接入节点
+
+平台侧登记与使用见 [海康 NVR 接入](nvr.md)。接入节点程序后续独立发布；本仓库若仍含构建目标，仅作过渡期开发用途，不以本文作为节点产品文档。
+
 ## 升级建议
 
 1. 升级前在运维中心备份，或停服复制完整 `BASE_DATA_DIR`。

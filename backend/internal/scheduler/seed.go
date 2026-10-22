@@ -11,6 +11,7 @@ func seedPresets(db *gorm.DB) error {
 		{Name: "数据库检查", JobType: "builtin", BuiltinKey: "database_check", Cron: "*/5 * * * *", Timezone: "Asia/Shanghai", Enabled: 0, IsBuiltin: 1},
 		{Name: "过期会话清理", JobType: "builtin", BuiltinKey: "session_cleanup", Cron: "0 3 * * *", Timezone: "Asia/Shanghai", Enabled: 0, IsBuiltin: 1},
 		{Name: "定期备份", JobType: "builtin", BuiltinKey: "backup", Cron: "0 2 * * *", Timezone: "Asia/Shanghai", Enabled: 0, IsBuiltin: 1},
+		{Name: "证据过期清理", JobType: "builtin", BuiltinKey: "evidence_cleanup", Cron: "30 3 * * *", Timezone: "Asia/Shanghai", Enabled: 0, IsBuiltin: 1},
 	} {
 		var old models.ScheduleJob
 		err := db.Where("is_builtin = 1 AND builtin_key = ?", j.BuiltinKey).First(&old).Error

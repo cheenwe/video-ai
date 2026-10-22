@@ -137,11 +137,15 @@ func (h *PlatformHandler) SaveSecurity(c *gin.Context) {
 }
 func (h *PlatformHandler) Overview(c *gin.Context) {
 	var users, depts, logs, storages, scheduleJobs int64
+	var cameras, runningDeployments, pendingEvents int64
 	h.DB.Model(&models.User{}).Count(&users)
 	h.DB.Model(&models.Department{}).Count(&depts)
 	h.DB.Model(&models.SysLog{}).Count(&logs)
 	h.DB.Model(&models.Storage{}).Where("enabled = ?", 1).Count(&storages)
 	h.DB.Model(&models.ScheduleJob{}).Where("enabled = ?", 1).Count(&scheduleJobs)
+	h.DB.Model(&models.Camera{}).Where("archived = 0 AND enabled = 1").Count(&cameras)
+	h.DB.Model(&models.Deployment{}).Where("status = ?", "running").Count(&runningDeployments)
+	h.DB.Model(&models.VideoEvent{}).Where("handle_status = ?", "pending").Count(&pendingEvents)
 
 	// 系统统计
 	var sysStats services.SystemStats
@@ -167,11 +171,14 @@ func (h *PlatformHandler) Overview(c *gin.Context) {
 
 	response.OK(c, gin.H{
 		"stats": gin.H{
-			"users":         users,
-			"departments":   depts,
-			"logs":          logs,
-			"storages":      storages,
-			"schedule_jobs": scheduleJobs,
+			"users":               users,
+			"departments":         depts,
+			"logs":                logs,
+			"storages":            storages,
+			"schedule_jobs":       scheduleJobs,
+			"cameras":             cameras,
+			"running_deployments": runningDeployments,
+			"pending_events":      pendingEvents,
 		},
 		"system": gin.H{
 			"hostname":    sysStats.Hostname,

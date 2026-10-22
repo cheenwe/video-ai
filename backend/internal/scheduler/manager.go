@@ -41,7 +41,7 @@ func NewManager(db *gorm.DB, cfg *config.Config, backup *services.OpsBackupServi
 	return &Manager{DB: db, Cfg: cfg, Backup: backup, parser: p, cron: cron.New(cron.WithParser(p), cron.WithLocation(time.UTC)), entries: map[uint]cron.EntryID{}, running: map[uint]bool{}, ctx: ctx, cancel: cancel}
 }
 func validAction(key string) bool {
-	return key == "backup" || key == "database_check" || key == "session_cleanup" || key == "ntp_sync"
+	return key == "backup" || key == "database_check" || key == "session_cleanup" || key == "ntp_sync" || key == "evidence_cleanup"
 }
 func (m *Manager) Start() error {
 	m.mu.Lock()
@@ -352,6 +352,11 @@ func (m *Manager) action(j models.ScheduleJob) (string, error) {
 		return "备份完成: " + manifest.ID, nil
 	case "ntp_sync":
 		return "", errors.New("旧NTP任务已停用，请使用运维中心的时间查询；平台不修改操作系统时间")
+	case "evidence_cleanup":
+		res := m.DB.WithContext(ctx).Model(&models.Evidence{}).
+			Where("created_at < ? AND status = ?", time.Now().AddDate(0, 0, -30), "ready").
+			Updates(map[string]any{"status": "expired"})
+		return fmt.Sprintf("标记过期证据 %d 条", res.RowsAffected), res.Error
 	}
 	return "", errors.New("未知动作")
 }

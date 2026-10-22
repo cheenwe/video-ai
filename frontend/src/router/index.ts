@@ -23,6 +23,56 @@ const router = createRouter({
           meta: { admin: true, title: "工作台" },
         },
         {
+          path: "admin/live",
+          component: () => import("@/views/admin/LiveMonitorView.vue"),
+          meta: { admin: true, title: "实时监控" },
+        },
+        {
+          path: "admin/camera-manage",
+          component: () => import("@/views/admin/CameraManageView.vue"),
+          meta: { admin: true, title: "视频管理" },
+        },
+        {
+          path: "admin/cameras",
+          component: () => import("@/views/admin/CamerasView.vue"),
+          meta: { admin: true, title: "监控预览" },
+        },
+        {
+          path: "admin/nvr",
+          component: () => import("@/views/admin/NvrAgentsView.vue"),
+          meta: { admin: true, title: "NVR 接入" },
+        },
+        {
+          path: "admin/boundaries",
+          component: () => import("@/views/admin/BoundariesView.vue"),
+          meta: { admin: true, title: "坑边管理" },
+        },
+        {
+          path: "admin/algorithms",
+          component: () => import("@/views/admin/AlgorithmsView.vue"),
+          meta: { admin: true, title: "算法管理" },
+        },
+        {
+          path: "admin/deployments",
+          component: () => import("@/views/admin/DeploymentsView.vue"),
+          meta: { admin: true, title: "布控管理" },
+        },
+        {
+          path: "admin/alerts",
+          component: () => import("@/views/admin/AlertsView.vue"),
+          meta: { admin: true, title: "告警中心" },
+        },
+        {
+          path: "admin/reports",
+          component: () => import("@/views/admin/ReportsView.vue"),
+          meta: { admin: true, title: "统计报表" },
+        },
+        {
+          path: "admin/access-devices",
+          component: () => import("@/views/admin/AccessDevicesView.vue"),
+          meta: { admin: true, title: "扩展接入" },
+        },
+        {
           path: "admin/users",
           component: () => import("@/views/admin/UsersView.vue"),
           meta: { admin: true, title: "用户管理" },

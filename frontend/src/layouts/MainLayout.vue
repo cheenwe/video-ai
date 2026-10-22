@@ -29,6 +29,16 @@ import {
   IconFolder,
   IconChevronDown,
   IconLock,
+  IconVideo,
+  IconDeviceCctv,
+  IconServer,
+  IconBorderCorners,
+  IconBrain,
+  IconPlayerPlay,
+  IconAlertTriangle,
+  IconChartBar,
+  IconPlug,
+  IconLayoutGrid,
 } from "@tabler/icons-vue";
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import * as notifApi from "@/api/notification";
@@ -45,6 +55,18 @@ const menuGroups = computed(() => [
   { id: 'workspace', label: '工作空间', icon: IconLayoutDashboard, children: [
     { path: '/admin/overview', label: '工作台', icon: IconLayoutDashboard },
     { path: '/admin/projects', label: '项目管理', icon: IconFolder },
+  ] },
+  { id: 'surveillance', label: '视频监控', icon: IconVideo, children: [
+    { path: '/admin/live', label: '实时监控', icon: IconLayoutGrid },
+    { path: '/admin/camera-manage', label: '视频管理', icon: IconDeviceCctv },
+    { path: '/admin/cameras', label: 'NVR 预览', icon: IconVideo },
+    { path: '/admin/nvr', label: 'NVR 接入', icon: IconServer },
+    { path: '/admin/boundaries', label: '坑边管理', icon: IconBorderCorners },
+    { path: '/admin/algorithms', label: '算法管理', icon: IconBrain },
+    { path: '/admin/deployments', label: '布控管理', icon: IconPlayerPlay },
+    { path: '/admin/alerts', label: '告警中心', icon: IconAlertTriangle },
+    { path: '/admin/reports', label: '统计报表', icon: IconChartBar },
+    { path: '/admin/access-devices', label: '扩展接入', icon: IconPlug },
   ] },
   { id: 'organization', label: '组织与权限', icon: IconUsers, children: [
     { path: '/admin/users', label: '用户管理', icon: IconUsers },

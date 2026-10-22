@@ -6,6 +6,9 @@ export interface OverviewStats {
   logs: number
   storages: number
   schedule_jobs: number
+  cameras?: number
+  running_deployments?: number
+  pending_events?: number
 }
 
 export interface DiskInfo {

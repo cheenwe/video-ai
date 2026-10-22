@@ -1,15 +1,16 @@
 package database
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"time"
 	"baseplatform/internal/config"
 	"baseplatform/internal/models"
 	"baseplatform/internal/security"
 	"baseplatform/internal/services"
 	"baseplatform/internal/settings"
+	"baseplatform/internal/videoai"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
@@ -56,7 +57,14 @@ func Open(cfg *config.Config) (*gorm.DB, error) {
 		sqlDB.SetMaxIdleConns(10)
 		sqlDB.SetConnMaxLifetime(5 * time.Minute)
 	}
-	if err = db.AutoMigrate(&models.User{}, &models.Department{}, &models.SysConfig{}, &models.SysLog{}, &models.AuthRevokedToken{}, &models.OAuthAccount{}, &models.PersonalAccessToken{}, &models.ApiCallLog{}, &models.ScheduleCommand{}, &models.ScheduleJob{}, &models.ScheduleRun{}, &models.Storage{}, &models.SysDict{}, &models.SysDictItem{}, &models.Notification{}, &models.PlatformEvent{}, &models.WebhookEndpoint{}, &models.WebhookDelivery{}, &models.Role{}, &models.Permission{}, &models.RolePermission{}, &models.UserRole{}, &models.Project{}, &models.ProjectMember{}, &models.CustomFieldDef{}, &models.CustomFieldValue{}); err != nil {
+	if err = db.AutoMigrate(
+		&models.User{}, &models.Department{}, &models.SysConfig{}, &models.SysLog{}, &models.AuthRevokedToken{}, &models.OAuthAccount{}, &models.PersonalAccessToken{}, &models.ApiCallLog{}, &models.ScheduleCommand{}, &models.ScheduleJob{}, &models.ScheduleRun{}, &models.Storage{}, &models.SysDict{}, &models.SysDictItem{}, &models.Notification{}, &models.PlatformEvent{}, &models.WebhookEndpoint{}, &models.WebhookDelivery{}, &models.Role{}, &models.Permission{}, &models.RolePermission{}, &models.UserRole{}, &models.Project{}, &models.ProjectMember{}, &models.CustomFieldDef{}, &models.CustomFieldValue{}, &models.NVRAgent{},
+		&models.CameraGroup{}, &models.Camera{}, &models.StreamProfile{},
+		&models.BoundaryVersion{}, &models.AlgoModel{}, &models.AlgoModelVersion{}, &models.RuleVersion{}, &models.BusinessTemplate{},
+		&models.Deployment{}, &models.DeploymentRevision{}, &models.RuntimeStatus{},
+		&models.VideoEvent{}, &models.EventAction{}, &models.Evidence{},
+		&models.RecordingPlan{}, &models.AccessDevice{},
+	); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
@@ -67,6 +75,9 @@ func Open(cfg *config.Config) (*gorm.DB, error) {
 	}
 	if err := rbac.SeedBuiltinRoles(); err != nil {
 		return nil, fmt.Errorf("初始化内置角色失败: %w", err)
+	}
+	if err := videoai.SeedDefaults(db); err != nil {
+		return nil, fmt.Errorf("初始化视频 AI 默认数据失败: %w", err)
 	}
 	return db, nil
 }

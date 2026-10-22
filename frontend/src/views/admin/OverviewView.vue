@@ -13,6 +13,9 @@ import {
   IconServer2,
   IconClock,
   IconServer,
+  IconDeviceCctv,
+  IconPlayerPlay,
+  IconAlertTriangle,
 } from '@tabler/icons-vue'
 import { ApiError } from '@/api/client'
 import { getAdminOverview } from '@/api/adminOverview'
@@ -26,6 +29,9 @@ const data = ref<AdminOverview | null>(null)
 const statCards = computed(() => {
   const s = data.value?.stats
   return [
+    { key: 'cameras', label: '摄像头', value: s?.cameras ?? 0, icon: IconDeviceCctv, to: '/admin/camera-manage' },
+    { key: 'running_deployments', label: '运行布控', value: s?.running_deployments ?? 0, icon: IconPlayerPlay, to: '/admin/deployments' },
+    { key: 'pending_events', label: '待处理告警', value: s?.pending_events ?? 0, icon: IconAlertTriangle, to: '/admin/alerts' },
     { key: 'users', label: '平台用户', value: s?.users ?? 0, icon: IconUsers, to: '/admin/users' },
     { key: 'departments', label: '组织部门', value: s?.departments ?? 0, icon: IconBuilding, to: '/admin/departments' },
     { key: 'storages', label: '存储对接', value: s?.storages ?? 0, icon: IconDatabase, to: '/admin/storages' },

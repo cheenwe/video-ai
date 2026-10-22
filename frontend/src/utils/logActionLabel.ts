@@ -104,6 +104,28 @@ export const LOG_ACTION_I18N_KEYS: Record<string, string> = {
   'ops.backup.create': 'logs.actions.opsBackupCreate',
   'ops.backup.delete': 'logs.actions.opsBackupDelete',
   'ops.logs.config': 'logs.actions.opsLogsConfig',
+
+  'nvr.agent.create': 'logs.actions.nvrAgentCreate',
+  'nvr.agent.update': 'logs.actions.nvrAgentUpdate',
+  'nvr.agent.delete': 'logs.actions.nvrAgentDelete',
+  'nvr.config.update': 'logs.actions.nvrConfigUpdate',
+  'nvr.record.start': 'logs.actions.nvrRecordStart',
+  'nvr.record.stop': 'logs.actions.nvrRecordStop',
+  'nvr.archive.start': 'logs.actions.nvrArchiveStart',
+  'nvr.recording.download': 'logs.actions.nvrRecordingDownload',
+
+  'camera.create': 'logs.actions.cameraCreate',
+  'camera.update': 'logs.actions.cameraUpdate',
+  'camera.archive': 'logs.actions.cameraArchive',
+  'camera.group.create': 'logs.actions.cameraGroupCreate',
+  'boundary.create': 'logs.actions.boundaryCreate',
+  'boundary.publish': 'logs.actions.boundaryPublish',
+  'deployment.create': 'logs.actions.deploymentCreate',
+  'deployment.start': 'logs.actions.deploymentStart',
+  'deployment.stop': 'logs.actions.deploymentStop',
+  'event.confirm': 'logs.actions.eventConfirm',
+  'event.close': 'logs.actions.eventClose',
+  'access.create': 'logs.actions.accessCreate',
 }
 
 type TranslateFn = ComposerTranslation

@@ -16,4 +16,6 @@ build/
 **/keys/
 doc/
 data/
+agent/
 release/
+.cu*
