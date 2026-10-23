@@ -57,7 +57,7 @@
 2. **坑边管理**获取演示候选 → 校准折线 → 发布。（候选为演示几何，带 demo 标记。）
 3. **算法管理**确认内置模板 `grab_edge_guard`；页面支持新建模型版本、发布、自检（自检报告含文件校验、classes 解析、样例推理结果）。
 4. **布控管理**新建布控 → 自检 → 启动；界面显示期望修订号与已应用修订号；表单暴露静音通知 / OSD / 保持时长等字段。
-5. **实时监控**：NVR 通道走 HLS，直连 RTSP 走 MJPEG（`/api/cameras/:id/preview.mjpg`）；Canvas 叠加坑边折线 / 抓斗轮廓 / 质心；右侧实时事件侧栏经 WebSocket 推送，断线 3s 重连。
+5. **实时监控**：布局支持 1/4/9/16 路切换（选择与布局记入 localStorage）；NVR 通道走 HLS，直连 RTSP 走 MJPEG（`/api/cameras/:id/preview.mjpg`）；Canvas 叠加坑边折线 / 抓斗轮廓 / 质心；右侧实时事件侧栏经 WebSocket 推送，断线 3s 重连。
 6. **告警中心**查看合并事件，确认/关闭（关闭不改现场 `scene_status`）；证据含现场截图 `screenshot.jpg` 与事件片段 `clip.mp4`（事件前 15s + 后 10s，录像中心可查看）。
 7. **统计报表**查看趋势、分析质量（ticks/normal/near/cross/unknown/offline、不可判定率）与离线时长；`GET /api/video/self-check` 输出真实注册的适配器、ffmpeg 可用性、ingest 路数与 WebSocket 订阅数。
 8. **扩展接入**登记 GB28181/推流配置；「探测」执行真机探测（SIP OPTIONS over UDP/TCP、HTTP 探活），探测成功后才可「同步为平台摄像头」。
@@ -81,6 +81,7 @@
 - **mock 适配器**仅用于流程验收；证据、overlay、报表、自检均带或暗示 `demo` / `demo_adapter`。不得宣传为真实检测精度。
 - **ONNX Runtime / GPU 会话池未接入**：`Inferencer` 接口与注册表已就绪，`adapter=onnx` 的模型版本在自检中会诚实校验文件（存在性 / 大小 / SHA-256 / classes），但默认二进制与 `go.mod` **不含** ORT；接入时应实现可替换 Inferencer / 独立 Worker，而不是声称「已支持 ONNX」。
 - **自动坑边仍为演示候选**：`mock.SuggestBoundary` 返回 `ai_candidate_demo` 演示折线，真模型候选依赖 M3 之后的模型接入。
+- **MJPEG 预览路数上限**：并发预览默认 32 路（每路一个 ffmpeg 解码进程），可用 `BASE_VIDEO_AI_MAX_PREVIEW` 调整；超限时面板提示「超过服务端预览上限」。
 - **GB28181 / 推流**：信令探测（SIP OPTIONS）与媒体拨测已对接真实协议；完整注册 / 媒体会话未与真机联验，按实际设备推进。
 - NVR 预览/录像仍走 [nvr.md](nvr.md)；平台摄像头是统一业务实体。
 - 已有库的 `admin` 角色不会自动获得新增权限点，需在角色页勾选。

@@ -3,7 +3,10 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"baseplatform/internal/models"
@@ -11,6 +14,37 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// maxPreviewSessions caps concurrent MJPEG viewers. Every direct-RTSP panel
+// keeps an ffmpeg decode subprocess alive, so an unbounded number of streams
+// would exhaust the host. Override with BASE_VIDEO_AI_MAX_PREVIEW.
+func maxPreviewSessions() int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("BASE_VIDEO_AI_MAX_PREVIEW"))); err == nil && v > 0 {
+		return v
+	}
+	return 32
+}
+
+var activePreviewSessions int64
+
+// acquirePreviewSession reserves a viewer slot only while under the cap, so a
+// rejected attempt must not leak a count (that would block later acquires).
+func acquirePreviewSession() bool {
+	cap := int64(maxPreviewSessions())
+	for {
+		cur := atomic.LoadInt64(&activePreviewSessions)
+		if cur >= cap {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&activePreviewSessions, cur, cur+1) {
+			return true
+		}
+	}
+}
+
+func releasePreviewSession() {
+	atomic.AddInt64(&activePreviewSessions, -1)
+}
 
 // ensureIngest makes sure a puller exists for the camera and returns the URL
 // it is using, so direct-RTSP cameras can be previewed without an NVR agent.
@@ -76,6 +110,11 @@ func (h *CameraHandler) MJPEG(c *gin.Context) {
 		response.BizFail(c, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !acquirePreviewSession() {
+		response.BizFail(c, fmt.Sprintf("预览路数已达上限（%d），请关闭部分画面", maxPreviewSessions()), http.StatusServiceUnavailable)
+		return
+	}
+	defer releasePreviewSession()
 	ch, unsub := h.Ingest.Subscribe(cam.ID, 4)
 	if ch == nil {
 		response.BizFail(c, "取流未启动", http.StatusServiceUnavailable)

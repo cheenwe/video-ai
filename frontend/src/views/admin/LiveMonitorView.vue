@@ -10,10 +10,49 @@ import { useToast } from "@/composables/useToast";
 const toast = useToast();
 const cameras = ref<Camera[]>([]);
 const selected = ref<number[]>([]);
+
+// ------------------------------------------------------------- layout ----
+
+interface LayoutDef { count: number; label: string; cols: string }
+// Adding a layout is a one-line change here; everything below is driven by
+// slotCount, so the grid, players, overlays and selection all scale.
+const LAYOUTS: LayoutDef[] = [
+  { count: 1, label: "1", cols: "col-12" },
+  { count: 4, label: "4", cols: "col-md-6" },
+  { count: 9, label: "9", cols: "col-md-4" },
+  { count: 16, label: "16", cols: "col-6 col-lg-3" },
+];
+
+const LAYOUT_KEY = "video-ai-live-layout";
+const SELECT_KEY = "video-ai-live-selection";
+
+function loadLayout(): number {
+  const v = Number(localStorage.getItem(LAYOUT_KEY));
+  return LAYOUTS.some((l) => l.count === v) ? v : 4;
+}
+
+const layout = ref<number>(loadLayout());
+const layoutDef = computed<LayoutDef>(
+  () => LAYOUTS.find((l) => l.count === layout.value) || LAYOUTS[1],
+);
+const slotCount = computed(() => layoutDef.value.count);
+
+// Slots always hold exactly slotCount entries; 0 means "empty panel".
 const slots = computed(() => {
-  const ids = selected.value.slice(0, 4);
-  while (ids.length < 4) ids.push(0);
+  const ids = selected.value.slice(0, slotCount.value).map((v) => v || 0);
+  while (ids.length < slotCount.value) ids.push(0);
   return ids;
+});
+
+watch(layout, (v) => {
+  localStorage.setItem(LAYOUT_KEY, String(v));
+  // Top the selection up so the enlarged grid is not half empty.
+  const next = selected.value.slice(0, slotCount.value);
+  for (const c of cameras.value) {
+    if (next.length >= slotCount.value) break;
+    if (!next.includes(c.id)) next.push(c.id);
+  }
+  selected.value = next;
 });
 
 const players = ref<(HTMLVideoElement | null)[]>([]);
@@ -23,6 +62,7 @@ const hlsMap = new Map<number, Hls>();
 // Live analysis state pushed over WebSocket, keyed by camera.
 const overlays = ref<Record<number, any>>({});
 const results = ref<Record<number, string>>({});
+const panelErrors = ref<Record<number, string>>({});
 const liveEvents = ref<any[]>([]);
 let ws: WebSocket | null = null;
 let reconnectTimer: number | undefined;
@@ -41,18 +81,44 @@ async function load() {
     // Every camera is selectable: NVR-bound ones use HLS, the rest use the
     // server-side puller (MJPEG) instead of being filtered out.
     cameras.value = (res.items || []).filter((c) => !c.archived);
-    if (!selected.value.length) {
-      selected.value = cameras.value.slice(0, 4).map((c) => c.id);
+    const valid = new Set(cameras.value.map((c) => c.id));
+    let restored: number[] = [];
+    try {
+      restored = (JSON.parse(localStorage.getItem(SELECT_KEY) || "[]") as number[]).filter((id) => valid.has(id));
+    } catch {
+      restored = [];
+    }
+    if (restored.length) {
+      selected.value = restored;
+    } else {
+      selected.value = cameras.value.slice(0, slotCount.value).map((c) => c.id);
     }
   } catch (e) {
     toast.show(e instanceof ApiError ? e.message : "加载失败");
   }
 }
 
+watch(selected, (v) => {
+  localStorage.setItem(SELECT_KEY, JSON.stringify(v));
+}, { deep: true });
+
 function setSlot(idx: number, cameraId: number) {
   const next = [...selected.value];
+  while (next.length < slotCount.value) next.push(0);
   next[idx] = cameraId;
   selected.value = next;
+}
+
+// MJPEG panels report load failures here: the server caps concurrent
+// previews, so a 16-panel grid can legitimately hit the limit.
+function onPanelError(idx: number) {
+  const id = slots.value[idx];
+  if (id) panelErrors.value[id] = "画面获取失败：码流不可达或超过服务端预览上限";
+}
+
+function onPanelLoad(idx: number) {
+  const id = slots.value[idx];
+  if (id) delete panelErrors.value[id];
 }
 
 function attachVideo(idx: number, el: HTMLVideoElement | null) {
@@ -159,7 +225,7 @@ function drawOverlay(idx: number) {
 }
 
 function redrawAll() {
-  for (let i = 0; i < 4; i++) drawOverlay(i);
+  for (let i = 0; i < slotCount.value; i++) drawOverlay(i);
 }
 
 // --------------------------------------------------------- websocket ----
@@ -204,8 +270,28 @@ const resultLabel: Record<string, string> = {
   normal: "正常", near: "临边", cross: "越界", unknown: "不可判定", offline: "离线",
 };
 
-watch(slots, () => { for (let i = 0; i < 4; i++) playSlot(i); }, { deep: true });
+watch(slots, () => {
+  for (let i = 0; i < slotCount.value; i++) playSlot(i);
+  // Release players that fell outside the shrunken grid so their HLS/ffmpeg
+  // resources are freed instead of leaking behind removed DOM nodes.
+  for (const [idx, h] of hlsMap) {
+    if (idx >= slotCount.value) {
+      h.destroy();
+      hlsMap.delete(idx);
+      players.value[idx] = null;
+      canvases.value[idx] = null;
+    }
+  }
+}, { deep: true });
 watch([overlays, results], () => nextTick(redrawAll), { deep: true });
+// Layout changes add new panels; observe them so overlays keep tracking size.
+watch(slotCount, () => {
+  nextTick(() => {
+    resizeObserver?.disconnect();
+    document.querySelectorAll(".live-stage").forEach((el) => resizeObserver!.observe(el));
+    redrawAll();
+  });
+});
 
 let resizeObserver: ResizeObserver | null = null;
 
@@ -229,16 +315,25 @@ onUnmounted(() => {
 
 <template>
   <div class="page-header d-print-none"><div class="container-xl">
-    <h2 class="page-title">实时监控</h2>
-    <div class="text-secondary">
-      四宫格预览：已绑定 NVR 通道走 HLS，直连 RTSP 走服务端取流（MJPEG）。分析轮廓与事件经 WebSocket 实时叠加。
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <h2 class="page-title">实时监控</h2>
+        <div class="text-secondary">
+          NVR 通道走 HLS，直连 RTSP 走服务端取流（MJPEG）。分析轮廓与事件经 WebSocket 实时叠加。
+        </div>
+      </div>
+      <div class="btn-group" role="group" aria-label="画面布局">
+        <button v-for="l in LAYOUTS" :key="l.count" type="button" class="btn btn-sm"
+          :class="layout === l.count ? 'btn-primary' : 'btn-outline-primary'"
+          @click="layout = l.count">{{ l.label }} 画面</button>
+      </div>
     </div>
   </div></div>
   <div class="page-body"><div class="container-xl">
     <div class="row g-3">
       <div class="col-lg-9">
         <div class="row g-2">
-          <div v-for="(id, idx) in slots" :key="idx" class="col-md-6">
+          <div v-for="(id, idx) in slots" :key="idx" :class="layoutDef.cols">
             <div class="card">
               <div class="card-header py-2">
                 <select class="form-select form-select-sm" :value="id"
@@ -252,8 +347,12 @@ onUnmounted(() => {
                   :ref="(el) => attachVideo(idx, el as HTMLVideoElement)"
                   class="w-100 h-100" style="object-fit:contain" muted autoplay playsinline controls />
                 <img v-else-if="id"
-                  :src="api.cameraPreviewURL(id)" class="w-100 h-100" style="object-fit:contain" alt="实时画面" />
+                  :src="api.cameraPreviewURL(id)" class="w-100 h-100" style="object-fit:contain" alt="实时画面"
+                  @error="onPanelError(idx)" @load="onPanelLoad(idx)" />
                 <div v-else class="d-flex align-items-center justify-content-center h-100 text-secondary">未选择摄像头</div>
+                <div v-if="panelErrors[id]" class="position-absolute bottom-0 start-0 end-0 text-center text-warning small bg-dark bg-opacity-75 py-1">
+                  {{ panelErrors[id] }}
+                </div>
                 <canvas :ref="(el) => attachCanvas(idx, el as HTMLCanvasElement)"
                   class="position-absolute top-0 start-0 w-100 h-100" style="pointer-events:none" />
                 <span v-if="results[id]" class="badge position-absolute top-0 end-0 m-2"
