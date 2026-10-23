@@ -153,6 +153,38 @@ func (h *EventHandler) BatchConfirm(c *gin.Context) {
 }
 
 // DownloadEvidence serves a ready evidence file (overlay / screenshot / clip).
+// Clips lists recent events for a camera together with their evidences, so the
+// recording centre can show event clips beside continuous recordings.
+func (h *EventHandler) Clips(c *gin.Context) {
+	cameraID, _ := strconv.Atoi(c.Param("id"))
+	limit := 50
+	if l := c.Query("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	var evs []models.VideoEvent
+	h.DB.Where("camera_id = ?", cameraID).Order("started_at desc").Limit(limit).Find(&evs)
+
+	ids := make([]uint, 0, len(evs))
+	for _, e := range evs {
+		ids = append(ids, e.ID)
+	}
+	byEvent := map[uint][]models.Evidence{}
+	if len(ids) > 0 {
+		var evid []models.Evidence
+		h.DB.Where("event_id IN ?", ids).Order("id asc").Find(&evid)
+		for _, e := range evid {
+			byEvent[e.EventID] = append(byEvent[e.EventID], e)
+		}
+	}
+	out := make([]gin.H, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, gin.H{"event": e, "evidences": byEvent[e.ID]})
+	}
+	response.OK(c, out, "")
+}
+
 func (h *EventHandler) DownloadEvidence(c *gin.Context) {
 	eventID, _ := strconv.Atoi(c.Param("id"))
 	evidID, _ := strconv.Atoi(c.Param("eid"))

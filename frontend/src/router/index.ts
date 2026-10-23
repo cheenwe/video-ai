@@ -58,6 +58,11 @@ const router = createRouter({
           meta: { admin: true, title: "布控管理" },
         },
         {
+          path: "admin/recordings",
+          component: () => import("@/views/admin/RecordingsView.vue"),
+          meta: { admin: true, title: "录像中心" },
+        },
+        {
           path: "admin/alerts",
           component: () => import("@/views/admin/AlertsView.vue"),
           meta: { admin: true, title: "告警中心" },

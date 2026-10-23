@@ -8,5 +8,6 @@ export const pagePermissions: Record<string,string[]> = {
  '/admin/live':['camera:live'], '/admin/camera-manage':['camera:list'],
  '/admin/boundaries':['boundary:list'], '/admin/algorithms':['algorithm:list'],
  '/admin/deployments':['deployment:list'], '/admin/alerts':['event:list'],
+ '/admin/recordings':['recording:list'],
  '/admin/reports':['report:list'], '/admin/access-devices':['access:list'],
 }

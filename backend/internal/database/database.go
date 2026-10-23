@@ -63,7 +63,7 @@ func Open(cfg *config.Config) (*gorm.DB, error) {
 		&models.BoundaryVersion{}, &models.AlgoModel{}, &models.AlgoModelVersion{}, &models.RuleVersion{}, &models.BusinessTemplate{},
 		&models.Deployment{}, &models.DeploymentRevision{}, &models.RuntimeStatus{},
 		&models.VideoEvent{}, &models.EventAction{}, &models.Evidence{},
-		&models.RecordingPlan{}, &models.AccessDevice{},
+		&models.RecordingPlan{}, &models.AccessDevice{}, &models.MediaOutage{}, &models.AnalysisStat{},
 	); err != nil {
 		sqlDB.Close()
 		return nil, err

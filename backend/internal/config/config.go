@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +19,10 @@ type Config struct {
 	DBDSN    string // 完整 DSN（优先于拆分字段）
 	DBHost, DBPort, DBUser, DBPassword, DBName, DBSSLMode string
 	DBDumpBinPath string // mysqldump / pg_dump 可执行路径，空则 PATH 查找
+	// VideoAIRequireFrames makes missing real frames a hard stop: deployments
+	// without live video report waiting_video instead of running on synthetic
+	// inference. Off by default so demo deployments still work.
+	VideoAIRequireFrames bool
 }
 
 func Load() (*Config, error) {
@@ -100,7 +105,8 @@ func Load() (*Config, error) {
 		DBUser:           strings.TrimSpace(os.Getenv("BASE_DB_USER")),
 		DBPassword:       os.Getenv("BASE_DB_PASSWORD"),
 		DBName:           dbName,
-		DBSSLMode:        strings.TrimSpace(os.Getenv("BASE_DB_SSLMODE")),
+		DBSSLMode:           strings.TrimSpace(os.Getenv("BASE_DB_SSLMODE")),
+		VideoAIRequireFrames: envBool("BASE_VIDEO_AI_REQUIRE_FRAMES"),
 		DBDumpBinPath:    strings.TrimSpace(os.Getenv("BASE_DB_DUMP_BIN")),
 	}, nil
 }
@@ -132,6 +138,19 @@ func (c *Config) DSN() string {
 			c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, sslmode)
 	}
 	return ""
+}
+
+// envBool reads a boolean environment variable; unset or unparsable is false.
+func envBool(key string) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false
+	}
+	return b
 }
 
 // ProtectedAbsRoots 返回禁止通过文件接口删除/改写的绝对路径（系统数据区）。

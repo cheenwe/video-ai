@@ -11,8 +11,9 @@ import (
 type MockAdapter struct{}
 
 func (MockAdapter) Name() string { return "mock" }
+func (MockAdapter) Demo() bool   { return true }
 
-func (MockAdapter) Infer(cameraID uint, frameTS time.Time, w, h float64) []Detection {
+func (MockAdapter) Infer(cameraID uint, frameTS time.Time, w, h float64) ([]Detection, error) {
 	if w <= 0 {
 		w = 1280
 	}
@@ -38,7 +39,7 @@ func (MockAdapter) Infer(cameraID uint, frameTS time.Time, w, h float64) []Detec
 		Confidence: 0.85 + 0.1*math.Sin(phase),
 		Centroid:   Point{X: cx, Y: cy},
 		Contour:    contour,
-	}}
+	}}, nil
 }
 
 func hashU32(v uint) uint32 {

@@ -273,6 +273,7 @@ func (s *RBACService) AssignRolePermissions(roleID uint, permissionCodes []strin
 }
 
 // RolePermissionCodes 返回角色拥有的权限 code 列表。
+
 func (s *RBACService) RolePermissionCodes(roleID uint) ([]string, error) {
 	var codes []string
 	err := s.DB.Model(&models.Permission{}).
@@ -342,6 +343,7 @@ func (s *RBACService) SeedBuiltinRoles() error {
 		err := s.DB.Where("code = ?", b.code).First(&role).Error
 		if err == nil {
 			// 已存在的授权由管理员维护；重启不得覆盖。
+			// 规格约定：已有库的 admin 角色不会自动获得新增权限点，需在角色页勾选。
 			continue
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {

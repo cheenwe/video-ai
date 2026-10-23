@@ -10,6 +10,7 @@ import (
 	"baseplatform/internal/models"
 	"baseplatform/internal/response"
 	"baseplatform/internal/services"
+	"baseplatform/internal/videoai/ingest"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -18,6 +19,11 @@ import (
 type CameraHandler struct {
 	DB   *gorm.DB
 	RBAC *services.RBACService
+	// ProbeAgent is set by server.go; nil means NVR-bound probes degrade to
+	// stream-URL checks.
+	ProbeAgent probeAgentCam
+	// Ingest pulls real frames; nil means no direct preview is possible.
+	Ingest *ingest.Manager
 }
 
 func cameraOut(c models.Camera, streams []models.StreamProfile) gin.H {

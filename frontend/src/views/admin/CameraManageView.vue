@@ -84,6 +84,91 @@ async function archive(c: Camera) {
   }
 }
 
+const probing = ref<Record<number, boolean>>({});
+
+async function probe(c: Camera) {
+  probing.value[c.id] = true;
+  try {
+    const r = await api.probeCamera(c.id);
+    c.media_status = r.media_status;
+    c.device_status = r.ok ? "online" : "offline";
+    toast.show(r.ok ? `探测成功：${r.detail || r.media_status}` : `探测失败：${r.error || r.media_status}`);
+  } catch (e) {
+    toast.show(e instanceof ApiError ? e.message : "探测失败");
+  } finally {
+    probing.value[c.id] = false;
+  }
+}
+
+// ------------------------------------------------------- bulk import ----
+
+const showImport = ref(false);
+const importText = ref("");
+const importing = ref(false);
+const importResult = ref<api.ImportResult[] | null>(null);
+const importTally = ref<{ total: number; created: number; failed: number } | null>(null);
+
+const importSample = `code,name,access_type,main_url,sub_url,remark
+cam-a,一号机,rtsp,rtsp://192.168.1.10:554/1,,东坑
+cam-b,二号机,rtsp,rtsp://192.168.1.11:554/1,,西坑`;
+
+function parseCSV(text: string): api.ImportRow[] {
+  const rows: api.ImportRow[] = [];
+  text.split(/\r?\n/).forEach((line, lineNo) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+    // A CSV header is not a camera.
+    if (lineNo === 0 && /^code\s*,/i.test(trimmed)) return;
+    // Split outside quotes so remarks containing commas survive.
+    const cells: string[] = [];
+    let cur = "";
+    let quoted = false;
+    for (let i = 0; i < trimmed.length; i++) {
+      const ch = trimmed[i];
+      if (ch === '"') { quoted = !quoted; continue; }
+      if (ch === "," && !quoted) { cells.push(cur.trim()); cur = ""; continue; }
+      cur += ch;
+    }
+    cells.push(cur.trim());
+    if (cells.length < 2) return;
+    rows.push({
+      code: cells[0] || "", name: cells[1] || "",
+      access_type: cells[2] || "rtsp",
+      main_url: cells[3] || "", sub_url: cells[4] || "", remark: cells[5] || "",
+    });
+  });
+  return rows;
+}
+
+async function runImport() {
+  const rows = parseCSV(importText.value);
+  if (!rows.length) {
+    toast.show("没有可导入的数据行");
+    return;
+  }
+  importing.value = true;
+  importResult.value = null;
+  importTally.value = null;
+  try {
+    const res = await api.importCameras(rows);
+    importResult.value = res.results || [];
+    importTally.value = { total: res.total, created: res.created, failed: res.failed };
+    toast.show(`导入完成：成功 ${res.created}，失败 ${res.failed}`);
+    await load();
+  } catch (e) {
+    toast.show(e instanceof ApiError ? e.message : "导入失败");
+  } finally {
+    importing.value = false;
+  }
+}
+
+function openImport() {
+  importText.value = importSample;
+  importResult.value = null;
+  importTally.value = null;
+  showImport.value = true;
+}
+
 onMounted(load);
 </script>
 
@@ -92,7 +177,10 @@ onMounted(load);
     <div class="container-xl">
       <div class="row g-2 align-items-center">
         <div class="col"><h2 class="page-title">视频管理</h2><div class="text-secondary">平台摄像头实体，可绑定 NVR 通道或直连 RTSP</div></div>
-        <div class="col-auto"><button class="btn btn-primary" v-permission="'camera:create'" @click="openCreate">新增摄像头</button></div>
+        <div class="col-auto">
+          <button class="btn" v-permission="'camera:create'" @click="openImport">批量导入</button>
+          <button class="btn btn-primary ms-1" v-permission="'camera:create'" @click="openCreate">新增摄像头</button>
+        </div>
       </div>
     </div>
   </div>
@@ -113,6 +201,7 @@ onMounted(load);
               <td>{{ c.access_type }}<span v-if="c.agent_camera_id" class="text-secondary"> / {{ c.agent_camera_id }}</span></td>
               <td>{{ c.device_status }}</td><td>{{ c.media_status }}</td><td>{{ c.analysis_status }}</td>
               <td class="text-end">
+                <button class="btn btn-sm" :disabled="probing[c.id]" v-permission="'camera:list'" @click="probe(c)">探测</button>
                 <button class="btn btn-sm" v-permission="'camera:update'" @click="openEdit(c)">编辑</button>
                 <button class="btn btn-sm btn-outline-danger ms-1" v-permission="'camera:delete'" @click="archive(c)">归档</button>
               </td>
@@ -142,6 +231,39 @@ onMounted(load);
     <template #footer>
       <button class="btn" @click="show = false">取消</button>
       <button class="btn btn-primary" @click="save">保存</button>
+    </template>
+  </CdModal>
+
+  <CdModal :show="showImport" title="批量导入摄像头" @close="showImport = false">
+    <div class="modal-body">
+      <div class="text-secondary small mb-2">
+        每行一条：<code>code,name,access_type,main_url,sub_url,remark</code>。首行若为表头会自动跳过；含逗号的内容请用双引号包裹。
+      </div>
+      <textarea v-model="importText" class="form-control mb-2" rows="8" spellcheck="false"></textarea>
+      <div v-if="importTally" class="mb-2">
+        <span class="badge bg-success me-1">成功 {{ importTally.created }}</span>
+        <span class="badge bg-danger me-1">失败 {{ importTally.failed }}</span>
+        <span class="badge bg-secondary">共 {{ importTally.total }}</span>
+      </div>
+      <div v-if="importResult && importResult.length" class="table-responsive" style="max-height: 220px; overflow:auto">
+        <table class="table table-sm card-table">
+          <thead><tr><th>行</th><th>编号</th><th>结果</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr v-for="r in importResult" :key="r.index">
+              <td>{{ r.index }}</td>
+              <td>{{ r.code || "-" }}</td>
+              <td><span class="badge" :class="r.ok ? 'bg-success' : 'bg-danger'">{{ r.ok ? "成功" : "失败" }}</span></td>
+              <td class="text-secondary">{{ r.error || (r.id ? `#${r.id}` : "") }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <template #footer>
+      <button class="btn" @click="showImport = false">关闭</button>
+      <button class="btn btn-primary" :disabled="importing" @click="runImport">
+        {{ importing ? "导入中…" : "开始导入" }}
+      </button>
     </template>
   </CdModal>
 </template>

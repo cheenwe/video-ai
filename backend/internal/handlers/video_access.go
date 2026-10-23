@@ -109,23 +109,6 @@ func (h *AccessHandler) Delete(c *gin.Context) {
 	response.OK(c, nil, "已删除")
 }
 
-func (h *AccessHandler) Probe(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	var d models.AccessDevice
-	if h.DB.First(&d, id).Error != nil {
-		response.BizFail(c, "设备不存在", 404)
-		return
-	}
-	// Skeleton: mark as needing adapter implementation.
-	msg := "适配器尚未对接真机信令/媒体，当前仅保存配置"
-	_ = h.DB.Model(&d).Updates(map[string]any{"status": "pending_adapter", "last_error": msg}).Error
-	response.OK(c, gin.H{
-		"id": d.ID, "kind": d.Kind, "status": "pending_adapter",
-		"ok": false, "message": msg,
-		"next_steps": []string{"配置 SIP/国标平台参数", "联调目录与邀请", "绑定平台摄像头通道"},
-	}, "")
-}
-
 // RecordingPlanHandler manages per-camera retain policies.
 type RecordingPlanHandler struct {
 	DB *gorm.DB

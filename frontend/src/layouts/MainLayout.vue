@@ -39,6 +39,7 @@ import {
   IconChartBar,
   IconPlug,
   IconLayoutGrid,
+  IconMovie,
 } from "@tabler/icons-vue";
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import * as notifApi from "@/api/notification";
@@ -65,6 +66,7 @@ const menuGroups = computed(() => [
     { path: '/admin/algorithms', label: '算法管理', icon: IconBrain },
     { path: '/admin/deployments', label: '布控管理', icon: IconPlayerPlay },
     { path: '/admin/alerts', label: '告警中心', icon: IconAlertTriangle },
+    { path: '/admin/recordings', label: '录像中心', icon: IconMovie },
     { path: '/admin/reports', label: '统计报表', icon: IconChartBar },
     { path: '/admin/access-devices', label: '扩展接入', icon: IconPlug },
   ] },

@@ -78,3 +78,65 @@ func TestVideoAICameraBoundaryDeploymentFlow(t *testing.T) {
 	// Cleanup runtime goroutine for this deployment.
 	f.ok("POST", fmt.Sprintf("/api/deployments/%d/stop", dep.ID), nil)
 }
+
+func TestVideoAICameraProbeAndModelSelfCheck(t *testing.T) {
+	f := setup(t)
+	f.cookie = f.login("admin", "Adminpass123")
+
+	e := f.ok("POST", "/api/cameras", map[string]any{
+		"code": "cam-probe-1", "name": "Probe Cam", "access_type": "rtsp",
+		"main_url": "rtsp://127.0.0.1:1/stream",
+	})
+	var cam struct {
+		ID uint `json:"id"`
+	}
+	json.Unmarshal(e.Data, &cam)
+
+	// Unreachable RTSP endpoint: probe must fail and mark media offline.
+	e = f.ok("POST", fmt.Sprintf("/api/cameras/%d/probe", cam.ID), nil)
+	var probe struct {
+		OK          bool   `json:"ok"`
+		MediaStatus string `json:"media_status"`
+		Error       string `json:"error"`
+	}
+	json.Unmarshal(e.Data, &probe)
+	if probe.OK || probe.MediaStatus != "offline" || probe.Error == "" {
+		t.Fatalf("expected failed probe, got %+v", probe)
+	}
+	var c models.Camera
+	f.db.First(&c, cam.ID)
+	if c.MediaStatus != "offline" {
+		t.Fatalf("media_status not persisted: %s", c.MediaStatus)
+	}
+
+	// An onnx version with a bogus file path must fail self-check loudly.
+	e = f.ok("POST", "/api/algorithms/model-versions", map[string]any{
+		"model_id": 1, "version": "onnx-test", "adapter": "onnx",
+		"file_path": "/nonexistent/model.onnx", "checksum": "deadbeef",
+	})
+	var mv struct {
+		ID uint `json:"id"`
+	}
+	json.Unmarshal(e.Data, &mv)
+	e = f.ok("POST", fmt.Sprintf("/api/algorithms/model-versions/%d/self-check", mv.ID), nil)
+	var rep struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			Name string `json:"name"`
+			OK   bool   `json:"ok"`
+		} `json:"checks"`
+	}
+	json.Unmarshal(e.Data, &rep)
+	if rep.OK {
+		t.Fatal("onnx self-check should fail without runtime")
+	}
+	failed := map[string]bool{}
+	for _, ck := range rep.Checks {
+		if !ck.OK {
+			failed[ck.Name] = true
+		}
+	}
+	if !failed["file"] || !failed["load"] {
+		t.Fatalf("expected file/load checks to fail, got %+v", failed)
+	}
+}

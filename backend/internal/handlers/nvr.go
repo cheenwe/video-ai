@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -549,6 +550,40 @@ func (h *NVRHandler) loadAgent(c *gin.Context) (models.NVRAgent, bool) {
 		return a, false
 	}
 	return a, true
+}
+
+// ProbeAgentCamera checks whether an agent is reachable and reports the
+// channel's presence and live-stream state. Used by the platform camera probe.
+func (h *NVRHandler) ProbeAgentCamera(agentID uint, agentCamID string) (found bool, live bool, err error) {
+	var a models.NVRAgent
+	if err := h.DB.First(&a, agentID).Error; err != nil {
+		return false, false, fmt.Errorf("节点不存在")
+	}
+	data, err := h.fetchStatus(context.Background(), &a, 6*time.Second)
+	if err != nil {
+		return false, false, err
+	}
+	var st struct {
+		Cameras []struct {
+			ID   string          `json:"id"`
+			Live *struct {
+				Running   bool   `json:"running"`
+				LastError string `json:"last_error"`
+			} `json:"live"`
+		} `json:"cameras"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return false, false, fmt.Errorf("节点状态解析失败: %w", err)
+	}
+	for _, cam := range st.Cameras {
+		if cam.ID == agentCamID {
+			if cam.Live != nil && cam.Live.Running {
+				return true, true, nil
+			}
+			return true, false, nil
+		}
+	}
+	return false, false, nil
 }
 
 func (h *NVRHandler) client(a *models.NVRAgent) (*nvr.Client, error) {

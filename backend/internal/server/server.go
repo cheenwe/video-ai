@@ -116,7 +116,8 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	project := &handlers.ProjectHandler{DB: db, RBAC: rbacSvc}
 	nvrH := &handlers.NVRHandler{DB: db, Cfg: cfg, RBAC: rbacSvc}
 	videoRuntime := videoai.NewManager(db, cfg.DataHome, eventBus)
-	camH := &handlers.CameraHandler{DB: db, RBAC: rbacSvc}
+	videoRuntime.RequireFrames = cfg.VideoAIRequireFrames
+	camH := &handlers.CameraHandler{DB: db, RBAC: rbacSvc, ProbeAgent: nvrH.ProbeAgentCamera, Ingest: videoRuntime.Ingest}
 	boundH := &handlers.BoundaryHandler{DB: db}
 	deployH := &handlers.DeploymentHandler{DB: db, Runtime: videoRuntime, RBAC: rbacSvc}
 	algoH := &handlers.AlgorithmHandler{DB: db}
@@ -125,6 +126,7 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	accessH := &handlers.AccessHandler{DB: db}
 	recPlanH := &handlers.RecordingPlanHandler{DB: db}
 	videoOpsH := &handlers.VideoOpsHandler{DB: db, DataHome: cfg.DataHome, Runtime: videoRuntime}
+	videoWSH := &handlers.VideoWSHandler{Runtime: videoRuntime}
 
 	// --- Public routes ---
 	r.GET("/api/health", p.Health)
@@ -297,10 +299,17 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	admin.DELETE("/cameras/groups/:id", middleware.RequirePermission(db, "camera:delete"), camH.DeleteGroup)
 	admin.GET("/cameras", middleware.RequirePermission(db, "camera:list"), camH.List)
 	admin.POST("/cameras", middleware.RequirePermission(db, "camera:create"), camH.Create)
+	admin.POST("/cameras/import", middleware.RequirePermission(db, "camera:create"), camH.ImportCameras)
 	admin.GET("/cameras/:id", middleware.RequirePermission(db, "camera:list"), camH.Get)
+	admin.POST("/cameras/:id/probe", middleware.RequirePermission(db, "camera:list"), camH.Probe)
 	admin.PUT("/cameras/:id", middleware.RequirePermission(db, "camera:update"), camH.Update)
 	admin.DELETE("/cameras/:id", middleware.RequirePermission(db, "camera:delete"), camH.Delete)
 	admin.POST("/cameras/sync-nvr/:agentId", middleware.RequirePermission(db, "camera:create"), camH.SyncFromNVR)
+	// Direct-RTSP preview: still frames and a motion-JPEG stream sourced from
+	// the ingest puller, so cameras without an NVR agent can be watched too.
+	admin.GET("/cameras/:id/frame.jpg", middleware.RequirePermission(db, "camera:live"), camH.Frame)
+	admin.GET("/cameras/:id/preview.mjpg", middleware.RequirePermission(db, "camera:live"), camH.MJPEG)
+	admin.GET("/cameras/:id/ingest", middleware.RequirePermission(db, "camera:live"), camH.IngestState)
 
 	admin.GET("/boundaries", middleware.RequirePermission(db, "boundary:list"), boundH.List)
 	admin.GET("/boundaries/candidate", middleware.RequirePermission(db, "boundary:edit"), boundH.Candidate)
@@ -328,6 +337,7 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	admin.GET("/events/:id", middleware.RequirePermission(db, "event:list"), eventH.Get)
 	admin.GET("/events/:id/evidences/:eid/file", middleware.RequirePermission(db, "event:list"), eventH.DownloadEvidence)
 	admin.POST("/events/:id/actions", middleware.RequirePermission(db, "event:handle"), eventH.Act)
+	admin.GET("/cameras/:id/event-clips", middleware.RequirePermission(db, "event:list"), eventH.Clips)
 
 	admin.GET("/reports/summary", middleware.RequirePermission(db, "report:list"), reportH.Summary)
 	admin.GET("/reports/runtime", middleware.RequirePermission(db, "report:list"), reportH.RuntimeMetrics)
@@ -337,10 +347,13 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	admin.PUT("/access-devices/:id", middleware.RequirePermission(db, "access:edit"), accessH.Update)
 	admin.DELETE("/access-devices/:id", middleware.RequirePermission(db, "access:edit"), accessH.Delete)
 	admin.POST("/access-devices/:id/probe", middleware.RequirePermission(db, "access:edit"), accessH.Probe)
+	admin.POST("/access-devices/:id/sync-camera", middleware.RequirePermission(db, "access:edit"), accessH.SyncCamera)
 
 	admin.GET("/recording-plans/:cameraId", middleware.RequirePermission(db, "recording:list"), recPlanH.Get)
 	admin.PUT("/recording-plans/:cameraId", middleware.RequirePermission(db, "camera:record"), recPlanH.Save)
 	admin.GET("/video/self-check", middleware.RequirePermission(db, "overview:list"), videoOpsH.SelfCheck)
+	admin.GET("/video/ws", middleware.RequirePermission(db, "camera:live"), videoWSH.Stream)
+	admin.GET("/video/ingest", middleware.RequirePermission(db, "camera:live"), videoOpsH.IngestStates)
 
 	admin.GET("/admin/overview", middleware.RequirePermission(db, "overview:list"), p.Overview)
 	admin.PUT("/site/branding", middleware.RequirePermission(db, "settings:general"), p.SaveBranding)

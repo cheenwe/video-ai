@@ -200,11 +200,51 @@ type RuntimeStatus struct {
 	ModelLoaded  int        `gorm:"not null;default:0" json:"model_loaded"`
 	LastResult   string     `gorm:"size:64" json:"last_result"` // normal|near|cross|unknown|offline
 	LastError    string     `gorm:"size:512" json:"last_error"`
+	// LastOverlayJSON keeps the geometry of the most recent analysis so the live
+	// view can draw the boundary and detections on top of the video.
+	LastOverlayJSON string `gorm:"type:text" json:"last_overlay_json"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	HeartbeatAt  *time.Time `json:"heartbeat_at"`
 }
 
 func (RuntimeStatus) TableName() string { return "runtime_statuses" }
+
+// AnalysisStat is a daily per-deployment counter rollup. It backs operational
+// metrics such as the undecidable rate, which cannot be derived from events
+// alone (most frames never raise an event).
+type AnalysisStat struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	Day          string    `gorm:"size:10;not null;index" json:"day"` // YYYY-MM-DD
+	CameraID     uint      `gorm:"index;not null" json:"camera_id"`
+	DeploymentID uint      `gorm:"index;not null" json:"deployment_id"`
+	Ticks        int64     `gorm:"not null;default:0" json:"ticks"`
+	Normal       int64     `gorm:"not null;default:0" json:"normal"`
+	Near         int64     `gorm:"not null;default:0" json:"near"`
+	Cross        int64     `gorm:"not null;default:0" json:"cross"`
+	Unknown      int64     `gorm:"not null;default:0" json:"unknown"`
+	Offline      int64     `gorm:"not null;default:0" json:"offline"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (AnalysisStat) TableName() string { return "analysis_stats" }
+
+// MediaOutage records one continuous period during which a camera produced no
+// usable frames. It is opened when analysis degrades to offline/unknown and
+// closed when frames resume, so offline duration is measured, not guessed.
+type MediaOutage struct {
+	ID          uint       `gorm:"primaryKey" json:"id"`
+	CameraID    uint       `gorm:"index;not null" json:"camera_id"`
+	ProjectID   *uint      `gorm:"index" json:"project_id"`
+	StartedAt   time.Time  `gorm:"index;not null" json:"started_at"`
+	EndedAt     *time.Time `gorm:"index" json:"ended_at"`
+	DurationSec int64      `json:"duration_sec"` // 0 while still open
+	Reason      string     `gorm:"size:512" json:"reason"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+func (MediaOutage) TableName() string { return "media_outages" }
 
 // VideoEvent 现场分析事件（与 PlatformEvent 通知总线分离）。
 type VideoEvent struct {

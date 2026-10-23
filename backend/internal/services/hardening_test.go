@@ -133,3 +133,66 @@ func TestDurableNotificationsAndStableRetries(t *testing.T) {
 		t.Fatal("retry created duplicate delivery")
 	}
 }
+
+// TestBuiltinRolePermissionContract 锁死规格中「菜单与权限」章节的约定：
+// 1. 新建库时内置 admin 角色带上视频 AI 全量权限点；
+// 2. 已有库撤销授权后，重启（重新 Seed）不得恢复；
+// 3. 已有库不会自动获得规格新增的权限点（需角色页勾选）。
+func TestBuiltinRolePermissionContract(t *testing.T) {
+	db, _ := testDB(t)
+	rbac := services.NewRBACService(db)
+	admin := models.User{Username: "permadmin", Role: models.RoleAdmin, PasswordHash: "x"}
+
+	// 1. 新建库：admin 角色带齐视频 AI 菜单权限。
+	for _, code := range []string{
+		"camera:live", "camera:list", "camera:create", "camera:update", "camera:delete",
+		"boundary:list", "boundary:edit", "boundary:publish",
+		"algorithm:list", "algorithm:publish",
+		"deployment:list", "deployment:edit", "deployment:control",
+		"event:list", "event:handle", "report:list",
+		"access:list", "access:edit",
+	} {
+		if !rbac.HasPermission(admin, code) {
+			t.Fatalf("fresh database missing builtin admin permission %s", code)
+		}
+	}
+	// user 角色不得越权拿到管理权限。
+	plain := models.User{Username: "permuser", Role: models.RoleUser, PasswordHash: "x"}
+	if rbac.HasPermission(plain, "camera:live") {
+		t.Fatal("builtin user role leaked admin permission")
+	}
+
+	// 2. 已有库：撤销全部授权后重启，授权不得被恢复。
+	var role models.Role
+	if err := db.Where("code = ?", models.RoleAdmin).First(&role).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.AssignRolePermissions(role.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.SeedBuiltinRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if rbac.HasPermission(admin, "user:list") {
+		t.Fatal("restart resurrected revoked administrator grants")
+	}
+
+	// 3. 已有库：规格后续新增的权限点不会自动授予，需角色页勾选。
+	services.RegisterPermission(services.PermissionDef{Code: "video:future", Name: "未来权限", Module: "video", Type: "action"})
+	if err := rbac.SyncPermissions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.SeedBuiltinRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if rbac.HasPermission(admin, "video:future") {
+		t.Fatal("existing database auto-granted a newly added permission")
+	}
+	// 角色页勾选后立即生效（全量替换语义保留）。
+	if err := rbac.AssignRolePermissions(role.ID, []string{"video:future"}); err != nil {
+		t.Fatal(err)
+	}
+	if !rbac.HasPermission(admin, "video:future") {
+		t.Fatal("manual grant via role page did not take effect")
+	}
+}
