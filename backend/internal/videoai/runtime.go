@@ -317,7 +317,14 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	if d.Status == "paused" || d.Status == "stopped" || d.Status == "draft" {
 		return nil
 	}
-	if !m.inSchedule(d.ScheduleCron, now) {
+	inWindow, valid := m.inSchedule(d.ScheduleCron, now)
+	if !valid {
+		// Invalid schedule_cron is a configuration fault: never analyse and
+		// never silently fall back to always-on (self-check flags it too).
+		m.bumpRuntime(d, ResultUnknown, 0, "schedule_cron 无效："+strings.TrimSpace(d.ScheduleCron), now, nil, -1)
+		return nil
+	}
+	if !inWindow {
 		if d.Status != "out_of_schedule" {
 			_ = m.DB.Model(&d).Update("status", "out_of_schedule").Error
 			d.Status = "out_of_schedule"
@@ -598,6 +605,19 @@ func (m *Manager) bumpRuntime(d models.Deployment, result string, dist float64, 
 		"backend":      backend,
 		"model_loaded": modelLoaded,
 	}).Error
+	// Every state transition reaches live viewers, including the paths that
+	// never run inference (offline / waiting_video / out_of_schedule / fault).
+	// The overlay of the previous tick is preserved so panels keep drawing it.
+	if m.Hub != nil {
+		m.Hub.PublishStatus(Update{
+			Type:         "analysis",
+			DeploymentID: d.ID,
+			CameraID:     d.CameraID,
+			Result:       result,
+			Reason:       reason,
+			TS:           now,
+		})
+	}
 	_ = dist
 }
 
@@ -773,19 +793,35 @@ func (m *Manager) notify(ev models.VideoEvent, cam models.Camera, title string) 
 	})
 }
 
-// inSchedule treats empty cron as always-on. Non-empty cron uses standard 5-field
-// expressions (e.g. "* 8-18 * * 1-5") matched against the current minute.
-func (m *Manager) inSchedule(expr string, now time.Time) bool {
+// ValidateScheduleCron rejects unparsable 5-field cron expressions. An empty
+// expression means always-on and stays valid. Save paths and self-check share
+// this so an invalid schedule fails loudly instead of silently analysing
+// around the clock.
+func ValidateScheduleCron(expr string) error {
+	if strings.TrimSpace(expr) == "" {
+		return nil
+	}
+	p := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	_, err := p.Parse(expr)
+	return err
+}
+
+// inSchedule treats an empty cron as always-on. A non-empty cron uses standard
+// 5-field expressions (e.g. "* 8-18 * * 1-5") matched against the current
+// minute. The second return value reports whether the expression parsed: an
+// invalid cron is a configuration error, so callers must surface it as a fault
+// instead of silently degrading to always-on analysis.
+func (m *Manager) inSchedule(expr string, now time.Time) (bool, bool) {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
-		return true
+		return true, true
 	}
 	sched, err := m.parser.Parse(expr)
 	if err != nil {
-		return true // invalid cron should not silently stop analysis; self-check can surface it
+		return false, false
 	}
 	prev := sched.Next(now.Add(-2 * time.Minute))
-	return !prev.After(now) && now.Sub(prev) < 2*time.Minute
+	return !prev.After(now) && now.Sub(prev) < 2*time.Minute, true
 }
 
 func levelFor(result string) string {
@@ -883,8 +919,7 @@ func SelfCheck(db *gorm.DB, d models.Deployment) (ok bool, report map[string]any
 	add("backend", true, adapter)
 	report["demo_adapter"] = demo
 	if strings.TrimSpace(d.ScheduleCron) != "" {
-		p := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
-		if _, err := p.Parse(d.ScheduleCron); err != nil {
+		if err := ValidateScheduleCron(d.ScheduleCron); err != nil {
 			add("schedule", false, "时段表达式无效: "+err.Error())
 		} else {
 			add("schedule", true, d.ScheduleCron)

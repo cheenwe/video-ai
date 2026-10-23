@@ -78,7 +78,7 @@
 
 ## 明确限制
 
-- **mock 适配器**仅用于流程验收；证据、overlay、报表、自检均带或暗示 `demo` / `demo_adapter`。不得宣传为真实检测精度。
+- **mock 适配器**仅用于流程验收；证据、overlay、报表、自检均带或暗示 `demo` / `demo_adapter`。不得宣传为真实检测精度。**生产 / 非演示部署必须设置 `BASE_VIDEO_AI_REQUIRE_FRAMES=1`**（无新鲜帧时报 `offline`，不伪造心跳）；`GET /api/video/self-check` 会回显当前 `require_frames` 状态，Live 页面在 mock / 无帧时显示「演示」徽章。
 - **ONNX Runtime / GPU 会话池未接入**：`Inferencer` 接口与注册表已就绪，`adapter=onnx` 的模型版本在自检中会诚实校验文件（存在性 / 大小 / SHA-256 / classes），但默认二进制与 `go.mod` **不含** ORT；接入时应实现可替换 Inferencer / 独立 Worker，而不是声称「已支持 ONNX」。
 - **自动坑边仍为演示候选**：`mock.SuggestBoundary` 返回 `ai_candidate_demo` 演示折线，真模型候选依赖 M3 之后的模型接入。
 - **MJPEG 预览路数上限**：并发预览默认 32 路（每路一个 ffmpeg 解码进程），可用 `BASE_VIDEO_AI_MAX_PREVIEW` 调整；超限时面板提示「超过服务端预览上限」。

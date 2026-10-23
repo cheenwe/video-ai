@@ -43,6 +43,30 @@ func (h *Hub) Publish(u Update) {
 	if u.DeploymentID != 0 {
 		h.last[u.DeploymentID] = u
 	}
+	h.fanout(u)
+	h.mu.Unlock()
+}
+
+// PublishStatus broadcasts a status-only update (no geometry) while keeping
+// the deployment's last known overlay. Paths that never reach inference —
+// offline, waiting_video, out_of_schedule, fault — use it so live viewers see
+// those transitions, and a client connecting afterwards still gets the last
+// overlay to draw instead of a blank panel.
+func (h *Hub) PublishStatus(u Update) {
+	h.mu.Lock()
+	if u.DeploymentID != 0 {
+		if prev, ok := h.last[u.DeploymentID]; ok && u.Overlay == nil {
+			u.Overlay = prev.Overlay
+		}
+		h.last[u.DeploymentID] = u
+	}
+	h.fanout(u)
+	h.mu.Unlock()
+}
+
+// fanout delivers to every subscriber; slow clients drop frames rather than
+// stalling analysis. Caller holds h.mu.
+func (h *Hub) fanout(u Update) {
 	for ch := range h.subs {
 		select {
 		case ch <- u:
@@ -50,7 +74,6 @@ func (h *Hub) Publish(u Update) {
 			// A slow client drops frames rather than stalling analysis.
 		}
 	}
-	h.mu.Unlock()
 }
 
 // Subscribe registers a consumer and returns its unsubscribe func.

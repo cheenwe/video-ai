@@ -319,7 +319,7 @@ onUnmounted(() => {
       <div>
         <h2 class="page-title">实时监控</h2>
         <div class="text-secondary">
-          NVR 通道走 HLS，直连 RTSP 走服务端取流（MJPEG）。分析轮廓与事件经 WebSocket 实时叠加。
+          NVR 通道走 HLS，直连 RTSP 走服务端取流（MJPEG）。分析轮廓与事件经 WebSocket 实时叠加；mock / 无帧画面带「演示」标记。
         </div>
       </div>
       <div class="btn-group" role="group" aria-label="画面布局">
@@ -355,6 +355,8 @@ onUnmounted(() => {
                 </div>
                 <canvas :ref="(el) => attachCanvas(idx, el as HTMLCanvasElement)"
                   class="position-absolute top-0 start-0 w-100 h-100" style="pointer-events:none" />
+                <span v-if="overlays[id] && (overlays[id].demo || overlays[id].frame_source === 'none')"
+                  class="badge position-absolute top-0 start-0 m-2" style="background:#868e96" title="演示数据：mock 适配器或无真实视频帧，不可作为真实检测精度">演示</span>
                 <span v-if="results[id]" class="badge position-absolute top-0 end-0 m-2"
                   :style="{ background: resultColor[results[id]] || '#626976' }">
                   {{ resultLabel[results[id]] || results[id] }}

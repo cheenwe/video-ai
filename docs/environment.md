@@ -55,6 +55,15 @@
 
 外部数据库备份依赖对应原生客户端；恢复须使用独立库与原生工具，详见 [运维与备份](ops-backup.md)。
 
+## 视频 AI（可选）
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `BASE_VIDEO_AI_REQUIRE_FRAMES` | 未设置（关闭） | 设为 `1` 时强制真实帧：取不到新鲜帧的布控报 `offline`/`waiting_video`，不伪造心跳、不回落 mock 演示。**非演示 / 生产环境强烈建议开启**；关闭时无帧场景会以 mock 继续演示（证据与报表带 `demo` 标记） |
+| `BASE_VIDEO_AI_MAX_PREVIEW` | `32` | MJPEG 并发预览上限（每路直连 RTSP 预览对应一个 ffmpeg 解码进程）；超限返回 503 并在面板提示，按机器负载调整 |
+
+说明与联调行为见 [视频 AI](video-ai.md)；自检输出（`GET /api/video/self-check`）会回显当前 `require_frames` 状态。
+
 ## 授权
 
 | 变量 | 说明 |

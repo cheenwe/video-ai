@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -36,7 +37,36 @@ type accessReq struct {
 	Name       string          `json:"name" binding:"required"`
 	CameraID   *uint           `json:"camera_id"`
 	ConfigJSON json.RawMessage `json:"config"`
-	Enabled    *int            `json:"enabled"`
+	// ConfigJSONAlias accepts the field name the model serializes back
+	// (config_json). Without it, a client that reads a device and posts the
+	// same object back would silently drop the whole config.
+	ConfigJSONAlias json.RawMessage `json:"config_json"`
+	Enabled         *int            `json:"enabled"`
+}
+
+// effectiveConfig returns whichever config alias the caller used, normalized
+// so the stored form is always a JSON object.
+func (r accessReq) effectiveConfig() json.RawMessage {
+	raw := r.ConfigJSON
+	if len(raw) == 0 {
+		raw = r.ConfigJSONAlias
+	}
+	return normalizeConfigJSON(raw)
+}
+
+// normalizeConfigJSON accepts both an object and a quoted JSON string. The
+// column stores text and the UI edits it as a textarea, so a client that
+// round-trips config_json naturally sends a string; storing it verbatim would
+// double-encode it and silently break probing.
+func normalizeConfigJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err == nil {
+			return json.RawMessage(bytes.TrimSpace([]byte(s)))
+		}
+	}
+	return raw
 }
 
 func (h *AccessHandler) Create(c *gin.Context) {
@@ -53,8 +83,8 @@ func (h *AccessHandler) Create(c *gin.Context) {
 		return
 	}
 	cfg := "{}"
-	if len(req.ConfigJSON) > 0 {
-		cfg = string(req.ConfigJSON)
+	if raw := req.effectiveConfig(); len(raw) > 0 {
+		cfg = string(raw)
 	}
 	d := models.AccessDevice{
 		Kind: kind, Code: strings.TrimSpace(req.Code), Name: strings.TrimSpace(req.Name),
@@ -85,8 +115,8 @@ func (h *AccessHandler) Update(c *gin.Context) {
 		return
 	}
 	upd := map[string]any{"name": strings.TrimSpace(req.Name), "camera_id": req.CameraID}
-	if len(req.ConfigJSON) > 0 {
-		upd["config_json"] = string(req.ConfigJSON)
+	if raw := req.effectiveConfig(); len(raw) > 0 {
+		upd["config_json"] = string(raw)
 	}
 	if req.Enabled != nil {
 		upd["enabled"] = *req.Enabled

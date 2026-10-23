@@ -63,6 +63,11 @@ func (h *VideoOpsHandler) SelfCheck(c *gin.Context) {
 	}
 	add("runtime", h.Runtime != nil, "in-process analysis manager")
 
+	// Surface the frame-mandatory switch so operators can tell a demo loop
+	// from a real one without reading the process environment.
+	requireFrames := h.Runtime != nil && h.Runtime.RequireFrames
+	add("require_frames", true, fmt.Sprintf("require_frames=%v；关闭时无帧场景以 mock 继续演示（带 demo 标记）", requireFrames))
+
 	// Report the adapters actually registered, instead of assuming mock.
 	adapters := videoai.RegisteredAdapters()
 	names := make([]string, 0, len(adapters))
@@ -108,6 +113,7 @@ func (h *VideoOpsHandler) SelfCheck(c *gin.Context) {
 	response.OK(c, gin.H{
 		"ok": okAll, "checks": checks, "generated_at": time.Now(),
 		"adapters": adapters,
+		"require_frames": requireFrames,
 		"note":     "四路长跑与断流恢复需在部署环境按 docs/video-ai.md 清单执行",
 	}, "")
 }

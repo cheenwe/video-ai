@@ -27,7 +27,11 @@ func SeedDefaults(db *gorm.DB) error {
 	var model models.AlgoModel
 	err := db.Where("code = ?", "grab_bucket_seg").First(&model).Error
 	if err == gorm.ErrRecordNotFound {
-		model = models.AlgoModel{Code: "grab_bucket_seg", Name: "抓斗分割（演示）", Framework: "onnx", Remark: "演示用占位模型，适配器为 mock"}
+		// Framework mirrors the running adapter: the seed ships a mock demo
+		// model, so claiming "onnx" here would contradict AlgoModelVersion.Adapter.
+		// Existing databases keep whatever row they already have; the runtime
+		// always follows the version's adapter field.
+		model = models.AlgoModel{Code: "grab_bucket_seg", Name: "抓斗分割（演示）", Framework: "mock", Remark: "演示用占位模型；Framework 与运行适配器一致为 mock，ONNX Runtime 未接入"}
 		if err := db.Create(&model).Error; err != nil {
 			return err
 		}

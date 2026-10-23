@@ -85,6 +85,10 @@ func (h *DeploymentHandler) Create(c *gin.Context) {
 		response.BizFail(c, "参数错误", 422)
 		return
 	}
+	if err := videoai.ValidateScheduleCron(req.ScheduleCron); err != nil {
+		response.BizFail(c, "时段表达式无效："+err.Error(), 422)
+		return
+	}
 	var cam models.Camera
 	if h.DB.First(&cam, req.CameraID).Error != nil || cam.Archived == 1 {
 		response.BizFail(c, "摄像头不存在", 404)
@@ -119,6 +123,10 @@ func (h *DeploymentHandler) Update(c *gin.Context) {
 	var req deploymentReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BizFail(c, "参数错误", 422)
+		return
+	}
+	if err := videoai.ValidateScheduleCron(req.ScheduleCron); err != nil {
+		response.BizFail(c, "时段表达式无效："+err.Error(), 422)
 		return
 	}
 	d.Name = strings.TrimSpace(req.Name)

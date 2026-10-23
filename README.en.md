@@ -12,9 +12,9 @@
 
 ## Overview
 
-The base capabilities of Video AI Admin Platform are extracted from the [NextFile](https://github.com/cheenwe/nextfile) Go / Vue project, decoupled from any specific business such as video. It runs against real databases and real APIs — no mocked admin data.
+The base capabilities of Video AI Admin Platform are extracted from the [NextFile](https://github.com/cheenwe/nextfile) Go / Vue project. It runs against real databases and real APIs — no mocked admin data.
 
-> Note: the "Video AI" branding follows the migration origin convention. This open repository targets the **generic platform foundation**; the video-specific modules (cameras, grabber model, pit-edge algorithm) are not included and can be built on top of this base.
+> Note: the "Video AI" branding follows the migration origin convention. This repository **includes** the video AI management loop (cameras, RTSP ingest, pit-edge boundaries, grab-bucket analysis, deployments, events, evidence, reports, GB28181-style access integration) on top of the generic platform foundation. Inference defaults to an in-process **mock adapter** for workflow acceptance — evidence, overlays and reports are marked `demo` and must not be read as real detection accuracy. **ONNX Runtime is not bundled**: the `onnx` adapter is an honest placeholder that fails until a real inference worker is wired. See [docs/video-ai.md](docs/video-ai.md) for the full capability and limitation list.
 
 ## Features
 
@@ -26,6 +26,7 @@ The base capabilities of Video AI Admin Platform are extracted from the [NextFil
 - **Operations**: audit/login logs, API call logs, scheduled tasks, backup & restore, health checks, run overview
 - **Notifications & Integration**: in-app notifications, webhook delivery (HMAC signature, exponential backoff retry)
 - **Storage & Licensing**: local / S3(OSS) / FTP / SFTP / WebDAV storages; commercial licensing (community/flagship, RSA-signed license file)
+- **Video AI (M0–M6)**: camera CRUD + RTSP/NVR probing + CSV import, real RTSP ingest & ffmpeg decoding, pit-edge boundary versioning, deployment control with FPS scheduling & hysteresis, pluggable inference adapters (mock default, onnx placeholder), event merging with screenshot/clip evidence, live MJPEG/HLS preview (1/4/9/16 layouts) with WebSocket push, operational reports, GB28181-style device probing & sync — details and limits in [docs/video-ai.md](docs/video-ai.md)
 
 ## Tech Stack
 
