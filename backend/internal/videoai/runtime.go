@@ -23,16 +23,17 @@ import (
 // Manager runs in-process analysis loops for active deployments. The
 // inferencer is resolved per deployment from its business template's model
 // version; unknown/failed inference paths degrade to unknown results instead
-// of fabricating detections.
+// of fabricating detections. A tick without a fresh real frame is reported
+// offline — analysis never runs on synthetic pixels.
 type Manager struct {
 	DB       *gorm.DB
 	DataHome string
 	Bus      *services.EventBus
 	// Ingest pulls real video. Nil means the platform runs without frames.
 	Ingest *ingest.Manager
-	// RequireFrames makes a missing frame a hard stop instead of falling back
-	// to synthetic inference. Off by default so demo flows keep working.
-	RequireFrames bool
+	// frames is the frame source used by analysis loops. It defaults to
+	// Ingest; tests replace it to inject deterministic frames.
+	frames frameSource
 	// Hub broadcasts analysis updates to live subscribers. Nil disables push.
 	Hub *Hub
 	logger *log.Logger
@@ -44,12 +45,20 @@ type Manager struct {
 	wg      sync.WaitGroup
 }
 
+// frameSource is the ingest surface the analysis loop needs.
+type frameSource interface {
+	Ensure(cameraID uint, url string) error
+	Latest(cameraID uint) (ingest.Frame, bool)
+}
+
 func NewManager(db *gorm.DB, dataHome string, bus *services.EventBus) *Manager {
+	ing := ingest.NewManager(dataHome)
 	return &Manager{
 		DB:       db,
 		DataHome: dataHome,
 		Bus:      bus,
-		Ingest:   ingest.NewManager(dataHome),
+		Ingest:   ing,
+		frames:   ing,
 		Hub:      NewHub(),
 		logger:   log.New(os.Stdout, "[videoai] ", log.LstdFlags|log.Lmsgprefix),
 		parser:   cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor),
@@ -81,17 +90,17 @@ func (m *Manager) cameraStreamURL(cameraID uint) string {
 // frameFor returns the freshest decoded frame for a camera, if ingest is
 // running for it and the frame is recent enough to be meaningful.
 func (m *Manager) frameFor(cam models.Camera) (ingest.Frame, bool) {
-	if m.Ingest == nil {
+	if m.frames == nil {
 		return ingest.Frame{}, false
 	}
 	u := m.cameraStreamURL(cam.ID)
 	if u == "" {
 		return ingest.Frame{}, false
 	}
-	if err := m.Ingest.Ensure(cam.ID, u); err != nil {
+	if err := m.frames.Ensure(cam.ID, u); err != nil {
 		return ingest.Frame{}, false
 	}
-	f, ok := m.Ingest.Latest(cam.ID)
+	f, ok := m.frames.Latest(cam.ID)
 	if !ok || time.Since(f.TS) > freshFrameWindow {
 		return ingest.Frame{}, false
 	}
@@ -99,12 +108,12 @@ func (m *Manager) frameFor(cam models.Camera) (ingest.Frame, bool) {
 }
 
 // resolvedModel is the model version selected for a deployment, via its
-// business template's ModelVersionID.
+// business template's ModelVersionID, together with the inference config.
 type resolvedModel struct {
 	VersionID uint
 	Adapter   string
 	Demo      bool
-	Classes   []string
+	Config    ModelConfig
 }
 
 // resolveModel loads the published model version bound to the deployment's
@@ -128,9 +137,11 @@ func (m *Manager) resolveModel(d models.Deployment) (*resolvedModel, error) {
 	if mv.Status != "published" {
 		return nil, fmt.Errorf("模型版本 %s 未发布", mv.Version)
 	}
-	rm := &resolvedModel{VersionID: mv.ID, Adapter: mv.Adapter}
+	cfg := ConfigForVersion(mv)
+	rm := &resolvedModel{VersionID: mv.ID, Adapter: mv.Adapter, Config: cfg}
 	if mv.ClassesJSON != "" {
-		_ = json.Unmarshal([]byte(mv.ClassesJSON), &rm.Classes)
+		_ = json.Unmarshal([]byte(mv.ClassesJSON), &cfg.Classes)
+		rm.Config.Classes = cfg.Classes
 	}
 	if impl, err := AdapterByName(mv.Adapter); err != nil {
 		return nil, err
@@ -138,6 +149,45 @@ func (m *Manager) resolveModel(d models.Deployment) (*resolvedModel, error) {
 		rm.Demo = impl.Demo()
 	}
 	return rm, nil
+}
+
+// ConfigForVersion derives inference settings from a model version row.
+// InputSchema may carry {"width":640,"height":640,"confidence":0.25,"iou":0.45};
+// unset fields fall back to YOLO defaults.
+func ConfigForVersion(mv models.AlgoModelVersion) ModelConfig {
+	cfg := ModelConfig{
+		VersionID:  mv.ID,
+		Adapter:    mv.Adapter,
+		ModelPath:  mv.FilePath,
+		Backend:    mv.Backend,
+		InputW:     640,
+		InputH:     640,
+		Confidence: 0.25,
+		IoU:        0.45,
+	}
+	if mv.InputSchema != "" {
+		var schema struct {
+			Width      int     `json:"width"`
+			Height     int     `json:"height"`
+			Confidence float64 `json:"confidence"`
+			IoU        float64 `json:"iou"`
+		}
+		if json.Unmarshal([]byte(mv.InputSchema), &schema) == nil {
+			if schema.Width > 0 {
+				cfg.InputW = schema.Width
+			}
+			if schema.Height > 0 {
+				cfg.InputH = schema.Height
+			}
+			if schema.Confidence > 0 {
+				cfg.Confidence = schema.Confidence
+			}
+			if schema.IoU > 0 {
+				cfg.IoU = schema.IoU
+			}
+		}
+	}
+	return cfg
 }
 
 func (m *Manager) Start() {
@@ -153,6 +203,10 @@ func (m *Manager) Stop() {
 	}
 	m.mu.Unlock()
 	m.wg.Wait()
+	CloseAdapters()
+	if m.Ingest != nil {
+		m.Ingest.StopAll()
+	}
 }
 
 func (m *Manager) RestoreRunning() {
@@ -260,8 +314,6 @@ func (m *Manager) ensureRuntime(d models.Deployment) {
 			DeploymentID: d.ID,
 			CameraID:     d.CameraID,
 			State:        "running",
-			Backend:      "mock",
-			ModelLoaded:  1,
 			UpdatedAt:    time.Now(),
 		}
 		_ = m.DB.Create(&rt).Error
@@ -346,20 +398,19 @@ func (m *Manager) tick(id uint, now time.Time) error {
 		return nil
 	}
 
-	// Real video: start ingest when the camera has a stream configured, and
-	// when frames are mandatory, refuse to analyse without them.
-	frameAgeMS := int64(-1)
-	frameW, frameH := 0, 0
-	if frame, ok := m.frameFor(cam); ok {
-		frameAgeMS = time.Since(frame.TS).Milliseconds()
-		frameW, frameH = frame.W, frame.H
-		m.noteMediaOK(cam, now)
-	} else if m.RequireFrames {
+	// Real video only: ingest is started when the camera has a stream, and a
+	// tick without a fresh frame is reported offline. Analysis never runs on
+	// synthetic pixels, so there is no demo fallback path.
+	frame, hasFrame := m.frameFor(cam)
+	if !hasFrame {
 		m.noteMediaDown(cam, "无可用视频帧（未配置码流或取流未连通）", now)
-		m.bumpRuntime(d, ResultOffline, 0, "等待视频帧", now, nil, frameAgeMS)
+		m.bumpRuntime(d, ResultOffline, 0, "等待视频帧", now, nil, -1)
 		_ = m.DB.Model(&cam).Update("analysis_status", "waiting_video").Error
 		return nil
 	}
+	frameAgeMS := time.Since(frame.TS).Milliseconds()
+	frameW, frameH := frame.W, frame.H
+	m.noteMediaOK(cam, now)
 
 	var bound models.BoundaryVersion
 	mediaOK := true
@@ -401,7 +452,7 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	if fh <= 0 {
 		fh = 720
 	}
-	dets, err := impl.Infer(cam.ID, now, fw, fh)
+	dets, err := impl.Infer(cam.ID, Frame{TS: now, JPEG: frame.JPEG, W: frame.W, H: frame.H}, rm.Config)
 	if err != nil {
 		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, rm, frameAgeMS)
 		_ = m.DB.Model(&cam).Update("analysis_status", "fault").Error
@@ -430,8 +481,6 @@ func (m *Manager) tick(id uint, now time.Time) error {
 		if bound.RefWidth > 0 && frameW > 0 && absDiff(frameW, bound.RefWidth) > bound.RefWidth/10 {
 			out.Overlay["frame_size_mismatch"] = true
 		}
-	} else {
-		out.Overlay["frame_source"] = "none"
 	}
 	if rm.Demo {
 		out.Overlay["demo"] = true
@@ -583,7 +632,7 @@ func (m *Manager) noteMediaOK(cam models.Camera, now time.Time) {
 func (m *Manager) bumpRuntime(d models.Deployment, result string, dist float64, reason string, now time.Time, rm *resolvedModel, frameAgeMS int64) {
 	m.recordStat(d, result, now)
 	hb := now
-	backend := "mock"
+	backend := ""
 	modelLoaded := 0
 	if rm != nil {
 		backend = rm.Adapter
@@ -880,8 +929,8 @@ func SelfCheck(db *gorm.DB, d models.Deployment) (ok bool, report map[string]any
 			add("boundary", true, fmt.Sprintf("v%d", b.Version))
 		}
 	}
-	adapter := "mock"
-	demo := true
+	adapter := ""
+	demo := false
 	if d.TemplateID == nil {
 		add("template", false, "未选择业务模板")
 	} else {
@@ -900,12 +949,9 @@ func SelfCheck(db *gorm.DB, d models.Deployment) (ok bool, report map[string]any
 					add("model", false, err.Error())
 				} else {
 					adapter = mv.Adapter
-					if impl, _ := AdapterByName(mv.Adapter); impl.Demo() {
-						demo = true
-					} else {
-						demo = false
-					}
-					add("model", true, fmt.Sprintf("%s v%s (adapter=%s)", "model", mv.Version, mv.Adapter))
+					impl, _ := AdapterByName(mv.Adapter)
+					demo = impl.Demo()
+					add("model", true, fmt.Sprintf("model %s (adapter=%s)", mv.Version, mv.Adapter))
 				}
 			}
 		}

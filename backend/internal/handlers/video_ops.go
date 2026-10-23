@@ -63,25 +63,34 @@ func (h *VideoOpsHandler) SelfCheck(c *gin.Context) {
 	}
 	add("runtime", h.Runtime != nil, "in-process analysis manager")
 
-	// Surface the frame-mandatory switch so operators can tell a demo loop
-	// from a real one without reading the process environment.
-	requireFrames := h.Runtime != nil && h.Runtime.RequireFrames
-	add("require_frames", true, fmt.Sprintf("require_frames=%v；关闭时无帧场景以 mock 继续演示（带 demo 标记）", requireFrames))
-
-	// Report the adapters actually registered, instead of assuming mock.
+	// Report the adapters actually registered; production must not carry a
+	// demo adapter, and real inference must be runnable end-to-end.
 	adapters := videoai.RegisteredAdapters()
 	names := make([]string, 0, len(adapters))
-	demoOnly := true
+	demoNames := make([]string, 0, len(adapters))
 	for _, a := range adapters {
 		if n, ok := a["name"].(string); ok {
 			names = append(names, n)
 		}
-		if d, ok := a["demo"].(bool); ok && !d {
-			demoOnly = false
+		if d, ok := a["demo"].(bool); ok && d {
+			if n, ok := a["name"].(string); ok {
+				demoNames = append(demoNames, n)
+			}
 		}
 	}
 	add("adapters", len(adapters) > 0, strings.Join(names, ","))
-	add("demo_only", true, fmt.Sprintf("demo_only=%v", demoOnly))
+	if len(demoNames) > 0 {
+		add("real_inference", false, "注册了演示适配器："+strings.Join(demoNames, ","))
+	} else {
+		add("real_inference", true, "无演示适配器；推理结果均来自真实模型")
+	}
+	if impl, err := videoai.AdapterByName("onnx"); err == nil {
+		if ok, detail := impl.Available(); ok {
+			add("onnx_worker", true, detail)
+		} else {
+			add("onnx_worker", false, "ONNX 推理不可用："+detail)
+		}
+	}
 
 	// Frame ingest drives real analysis; report whether the transcoder is present.
 	if ffmpegPath, err := exec.LookPath("ffmpeg"); err != nil {
@@ -113,7 +122,6 @@ func (h *VideoOpsHandler) SelfCheck(c *gin.Context) {
 	response.OK(c, gin.H{
 		"ok": okAll, "checks": checks, "generated_at": time.Now(),
 		"adapters": adapters,
-		"require_frames": requireFrames,
 		"note":     "四路长跑与断流恢复需在部署环境按 docs/video-ai.md 清单执行",
 	}, "")
 }

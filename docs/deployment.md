@@ -96,6 +96,20 @@ bash scripts/package.sh windows arm64
 
 在 Actions → 对应运行 → Artifacts 下载 `baseplatform-系统-架构`。构建成功不等于所有目标操作系统均已现场验收。
 
+### 自动发版（GitHub Release）
+
+推送 `v*` tag（如 `v0.2.0`）会触发完整测试与六平台打包，随后 `release` job 自动把 `release/` 下全部压缩包与 `SHA256SUMS` 发布到 GitHub Release：
+
+1. 发布前先在仓库根 `CHANGELOG.md` 顶部补写 `## <X.Y.Z> — <日期>` 条目（Keep a Changelog，只写用户/运维可感知的变更）；
+2. 提交后打 tag 并推送：`git tag v0.2.0 && git push origin v0.2.0`；
+3. Release 正文取自 CHANGELOG 对应版本段落，其后附加 GitHub 自动生成的提交对照；CHANGELOG 缺条目时仍会发版，但正文会标注并退回自动对照；
+4. job 重跑是幂等的：Release 已存在时仅重新上传资产（`--clobber`）。
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
 ## 跨平台编译
 
 无 cgo 依赖，示例：

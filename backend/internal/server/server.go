@@ -116,7 +116,6 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	project := &handlers.ProjectHandler{DB: db, RBAC: rbacSvc}
 	nvrH := &handlers.NVRHandler{DB: db, Cfg: cfg, RBAC: rbacSvc}
 	videoRuntime := videoai.NewManager(db, cfg.DataHome, eventBus)
-	videoRuntime.RequireFrames = cfg.VideoAIRequireFrames
 	camH := &handlers.CameraHandler{DB: db, RBAC: rbacSvc, ProbeAgent: nvrH.ProbeAgentCamera, Ingest: videoRuntime.Ingest}
 	boundH := &handlers.BoundaryHandler{DB: db}
 	deployH := &handlers.DeploymentHandler{DB: db, Runtime: videoRuntime, RBAC: rbacSvc}
@@ -320,6 +319,7 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	admin.GET("/algorithms/models", middleware.RequirePermission(db, "algorithm:list"), algoH.ListModels)
 	admin.GET("/algorithms/rules", middleware.RequirePermission(db, "algorithm:list"), algoH.ListRules)
 	admin.GET("/algorithms/templates", middleware.RequirePermission(db, "algorithm:list"), algoH.ListTemplates)
+	admin.PUT("/algorithms/templates/:id", middleware.RequirePermission(db, "algorithm:publish"), algoH.UpdateTemplate)
 	admin.POST("/algorithms/model-versions", middleware.RequirePermission(db, "algorithm:publish"), algoH.CreateModelVersion)
 	admin.POST("/algorithms/model-versions/:id/publish", middleware.RequirePermission(db, "algorithm:publish"), algoH.PublishModelVersion)
 	admin.POST("/algorithms/model-versions/:id/self-check", middleware.RequirePermission(db, "algorithm:list"), algoH.SelfCheckModel)

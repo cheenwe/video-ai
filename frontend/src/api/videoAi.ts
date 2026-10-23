@@ -120,8 +120,11 @@ export const listBoundaries = (cameraId?: number) =>
 export const createBoundary = (body: Record<string, unknown>) => post<BoundaryVersion>("/api/boundaries", body);
 export const publishBoundary = (id: number) => post<BoundaryVersion>(`/api/boundaries/${id}/publish`);
 export const rollbackBoundary = (id: number) => post<BoundaryVersion>(`/api/boundaries/${id}/rollback`);
+// Automatic boundary candidates require a real model on live frames; the
+// endpoint fails honestly (501) until then, so the geometry type is only a
+// placeholder for when real candidates exist.
 export const boundaryCandidate = (cameraId: number) =>
-  request<{ geometry: any; ref_width: number; ref_height: number; demo: boolean }>(`/api/boundaries/candidate?camera_id=${cameraId}`);
+  request<{ geometry: any; ref_width: number; ref_height: number }>(`/api/boundaries/candidate?camera_id=${cameraId}`);
 
 export const listModels = () => request<AlgoModel[]>("/api/algorithms/models");
 export const listRules = () => request<RuleVersion[]>("/api/algorithms/rules");

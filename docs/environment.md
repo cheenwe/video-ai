@@ -59,10 +59,14 @@
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `BASE_VIDEO_AI_REQUIRE_FRAMES` | 未设置（关闭） | 设为 `1` 时强制真实帧：取不到新鲜帧的布控报 `offline`/`waiting_video`，不伪造心跳、不回落 mock 演示。**非演示 / 生产环境强烈建议开启**；关闭时无帧场景会以 mock 继续演示（证据与报表带 `demo` 标记） |
 | `BASE_VIDEO_AI_MAX_PREVIEW` | `32` | MJPEG 并发预览上限（每路直连 RTSP 预览对应一个 ffmpeg 解码进程）；超限返回 503 并在面板提示，按机器负载调整 |
+| `BASE_VIDEO_AI_ONNX_WORKER` | 内建 worker | ONNX 推理 worker 命令（默认 `python3 backend/workers/onnx/worker.py`）；指向自定义命令可实现同一协议的其他 worker |
 
-说明与联调行为见 [视频 AI](video-ai.md)；自检输出（`GET /api/video/self-check`）会回显当前 `require_frames` 状态。
+说明：
+
+- 视频 AI 分析**只走真实链路**：无新鲜帧时布控报 `offline`（`waiting_video`），不存在开关可以回落到演示推理（旧版 `BASE_VIDEO_AI_REQUIRE_FRAMES` 已随 mock 移除而取消，设置它无效果）。
+- 推理 worker 依赖 Python + onnxruntime（`pip install -r backend/workers/onnx/requirements.txt`）；`GET /api/video/self-check` 的 `onnx_worker` 项会如实报告其状态。
+- 联调行为见 [视频 AI](video-ai.md)。
 
 ## 授权
 

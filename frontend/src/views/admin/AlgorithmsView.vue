@@ -13,7 +13,7 @@ const templates = ref<BusinessTemplate[]>([]);
 
 const show = ref(false);
 const saving = ref(false);
-const form = ref({ model_id: 0, version: "", adapter: "mock", backend: "cpu", file_path: "", checksum: "" });
+const form = ref({ model_id: 0, version: "", adapter: "onnx", backend: "cpu", file_path: "", checksum: "" });
 const checking = ref<Record<number, boolean>>({});
 const publishing = ref<Record<number, boolean>>({});
 
@@ -33,12 +33,8 @@ async function load() {
 onMounted(load);
 
 function openCreateVersion(m: AlgoModel) {
-  form.value = { model_id: m.id, version: "", adapter: "mock", backend: "cpu", file_path: "", checksum: "" };
+  form.value = { model_id: m.id, version: "", adapter: "onnx", backend: "cpu", file_path: "", checksum: "" };
   show.value = true;
-}
-
-function adapterChanged() {
-  if (form.value.adapter === "mock") form.value.file_path = "";
 }
 
 async function saveVersion() {
@@ -46,8 +42,8 @@ async function saveVersion() {
     toast.show("请填写版本号");
     return;
   }
-  if (form.value.adapter === "onnx" && !form.value.file_path.trim()) {
-    toast.show("ONNX 版本需要填写模型文件路径");
+  if (!form.value.file_path.trim()) {
+    toast.show("真实模型必须填写模型文件路径（.onnx）");
     return;
   }
   saving.value = true;
@@ -94,7 +90,7 @@ async function selfCheck(v: { id: number; version: string }) {
 <template>
   <div class="page-header d-print-none"><div class="container-xl">
     <h2 class="page-title">算法管理</h2>
-    <div class="text-secondary">基础模型 / 行为规则 / 业务模板。mock 为演示适配器；ONNX 版本需真实推理运行时接入后才会通过自检。</div>
+    <div class="text-secondary">基础模型 / 行为规则 / 业务模板。推理适配器为 onnx（真实 ONNX Runtime worker）；自检通过真实加载与样例推理验证，无演示适配器。</div>
   </div></div>
   <div class="page-body"><div class="container-xl">
     <div class="row g-3">
@@ -170,17 +166,15 @@ async function selfCheck(v: { id: number; version: string }) {
     <div class="modal-body">
       <div class="mb-2"><label class="form-label">版本号</label><input v-model="form.version" class="form-control" placeholder="如 1.0.0" /></div>
       <div class="mb-2"><label class="form-label">适配器</label>
-        <select v-model="form.adapter" class="form-select" @change="adapterChanged">
-          <option value="mock">mock（演示）</option>
-          <option value="onnx">onnx（需推理运行时）</option>
+        <select v-model="form.adapter" class="form-select">
+          <option value="onnx">onnx（真实推理，经 ONNX Runtime worker）</option>
         </select>
       </div>
-      <template v-if="form.adapter === 'onnx'">
-        <div class="mb-2"><label class="form-label">模型文件路径</label><input v-model="form.file_path" class="form-control" placeholder="服务端可访问的 .onnx 路径" /></div>
-        <div class="mb-2"><label class="form-label">校验和（可选，SHA-256）</label><input v-model="form.checksum" class="form-control" /></div>
-      </template>
-      <div class="alert alert-warning small mb-0" v-if="form.adapter === 'onnx'">
-        当前未接入 ONNX Runtime / GPU Worker，onnx 版本可以登记与发布，但布控运行会报「推理适配器未接入」，自检将失败。
+      <div class="mb-2"><label class="form-label">模型文件路径</label><input v-model="form.file_path" class="form-control" placeholder="服务端可访问的 .onnx 路径" /></div>
+      <div class="mb-2"><label class="form-label">校验和（可选，SHA-256）</label><input v-model="form.checksum" class="form-control" /></div>
+      <div class="alert alert-warning small mb-0">
+        推理由外部 ONNX Runtime worker 执行（见 backend/workers/onnx）。自检会真实加载模型并跑一帧样例推理；
+        worker 不可用时自检失败，不会伪装通过。无演示适配器。
       </div>
     </div>
     <template #footer>

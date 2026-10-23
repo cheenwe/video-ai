@@ -66,15 +66,15 @@
 ### 视频 AI（M0–M6）
 
 - 平台摄像头 / 分组 / 码流配置，支持绑定 NVR 接入通道或直连 RTSP；拨测探测与 CSV 批量导入（逐行反馈）
-- 坑边边界版本（草稿、发布、失效、回滚）与演示 AI 候选
-- 算法资产：基础模型、行为规则（`grab_near_edge` / `grab_cross_boundary`）、业务模板；模型版本发布与自检
+- 坑边边界版本（草稿、发布、失效、回滚）与手动折线编辑（AI 候选需真实模型推理，不可用时明确提示）
+- 算法资产：基础模型、行为规则（`grab_near_edge` / `grab_cross_boundary`）、业务模板；模型版本发布前经真实加载 + 样例推理自检
 - 布控启停 / 暂停 / 自检；期望修订号与运行时已应用版本分离；`AnalysisFPS` 调度与 `Trigger/RecoverHoldSec` 时序滞回
-- 真实帧接入：RTSP 拉流（H264/H265）+ ffmpeg 解码（无 CGO）；实时监控 1/4/9/16 路布局切换，NVR 通道 HLS 预览、直连 RTSP MJPEG 预览，Canvas 分析轮廓叠加
-- 可插拔推理适配器（`Inferencer` 注册表，默认 mock 演示）；证据含现场截图与事件片段（前 15s + 后 10s）
-- 告警处置（确认 / 处理 / 关闭，关闭不改现场状态）、报表（含分析质量与离线时长运营指标）、WebSocket 实时推送与平台自检
-- 录像中心：NVR 录像、录像计划、事件片段回放
+- 真实推理链路：RTSP 拉流（H264/H265）+ ffmpeg 解码（无 CGO）→ JPEG → letterbox/归一化 → 独立 ONNX Runtime worker → 框解码 + NMS；**无 mock/演示适配器**，无帧即 offline
+- 告警处置（确认 / 处理 / 关闭，关闭不改现场状态）、事件证据（现场截图 + 事件片段）、报表（含分析质量与离线时长运营指标）、WebSocket 实时推送
+- 实时监控 1/4/9/16 路布局切换；NVR 通道 HLS 预览、直连 RTSP MJPEG 预览，Canvas 分析轮廓叠加
+- 录像中心：NVR 录像、录像计划（执行依赖 nvr-agent）、事件片段回放
 - 扩展接入：GB28181、RTMP/HTTP-FLV/HLS 输入登记、真机探测（SIP OPTIONS / HTTP）与同步为平台摄像头
-- 计划任务内置 `evidence_cleanup`；四路自动化压测脚本 `scripts/video-ai-soak.sh`
+- 计划任务内置 `evidence_cleanup`；四路压测脚本 `scripts/video-ai-soak.sh`（真实模式 / fail-closed 模式）
 
 详见 [视频 AI](video-ai.md)。
 
@@ -111,9 +111,11 @@
 
 ## 未包含 / 限制
 
-- 真实 ONNX Runtime / GPU 推理工作进程（接口与注册表就绪，当前为 mock 适配器占位）
+- ONNX Runtime 未编入主二进制：推理经独立 worker（`backend/workers/onnx`，CPU provider 已验证协议与管线）；GPU（CUDA）与真实模型效果需在 worker 环境验证
+- 模型输出布局按 YOLO detect 解码；其他布局需扩展 `internal/videoai/postprocess.go`
 - GB28181 / 推流完整信令与媒体会话（OPTIONS 探测已对接真实协议，未与真机联验）
-- 自动坑边真模型候选（当前为演示折线）
+- 自动坑边真模型候选（演示折线生成器已移除）
+- 直连 RTSP 连续录像（录像计划保存后执行依赖 nvr-agent）
 - 多租户 SaaS、计费商城、机械停机联锁
 - 分布式调度与多实例 SQLite 并发写
 

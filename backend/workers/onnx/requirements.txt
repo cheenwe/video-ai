@@ -1,0 +1,5 @@
+# ONNX Runtime inference worker for the video-ai platform.
+# The Go service sends pre-processed NCHW float32 tensors and decodes the
+# raw outputs itself; this process only owns the ORT session.
+onnxruntime>=1.16
+numpy>=1.24

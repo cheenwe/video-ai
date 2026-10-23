@@ -120,3 +120,40 @@ jobs:
           docker logs baseplatform-ci || true
           docker rm -f baseplatform-ci || true
           docker volume rm baseplatform-ci-data || true
+  # Push a v* tag (e.g. v0.2.0) to run the full pipeline and publish the
+  # platform archives to a GitHub Release with notes from CHANGELOG.md.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [frontend, backend, packages]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all platform archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: baseplatform-*
+          path: release
+          merge-multiple: true
+      - name: Consolidate checksums
+        run: |
+          cat release/*.sha256 | sort > release/SHA256SUMS
+          cat release/SHA256SUMS
+      - name: Compose release notes
+        run: bash .github/scripts/release-notes.sh "$GITHUB_REF_NAME" | tee release-notes.md
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; re-uploading assets."
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --generate-notes --latest --verify-tag \
+              -R "$GITHUB_REPOSITORY"
+          fi

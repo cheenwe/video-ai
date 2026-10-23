@@ -29,9 +29,16 @@ func TestValidateGeometryMinPoints(t *testing.T) {
 	}
 }
 
-func TestSuggestBoundary(t *testing.T) {
-	g := SuggestBoundary(1280, 720)
-	if err := ValidateGeometry(g, 1280, 720); err != nil {
-		t.Fatal(err)
+// TestNoSyntheticBoundaryCandidates locks the no-mock contract: the demo
+// polyline generator is gone from the package, so nothing can hand out
+// fabricated boundary geometry.
+func TestNoSyntheticBoundaryCandidates(t *testing.T) {
+	if RegisteredAdapters() == nil {
+		t.Fatal("adapter registry unavailable")
+	}
+	for _, a := range RegisteredAdapters() {
+		if name, _ := a["name"].(string); name == "mock" {
+			t.Fatal("mock adapter must not be registered in production")
+		}
 	}
 }

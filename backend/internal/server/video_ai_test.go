@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -51,21 +53,100 @@ func TestVideoAICameraBoundaryDeploymentFlow(t *testing.T) {
 	}
 	json.Unmarshal(e.Data, &dep)
 
+	// The seeded template binds an unpublished onnx version: self-check must
+	// fail and start must be refused. Nothing may silently fall back to a
+	// demo adapter.
+	e = f.ok("POST", fmt.Sprintf("/api/deployments/%d/self-check", dep.ID), nil)
+	var chk struct {
+		OK     bool `json:"ok"`
+		Report struct {
+			Checks []struct {
+				Name string `json:"name"`
+				OK   bool   `json:"ok"`
+			} `json:"checks"`
+		} `json:"report"`
+	}
+	json.Unmarshal(e.Data, &chk)
+	if chk.OK {
+		t.Fatal("self-check must fail while the model version is a draft")
+	}
+	failed := map[string]bool{}
+	for _, c := range chk.Report.Checks {
+		if !c.OK {
+			failed[c.Name] = true
+		}
+	}
+	if !failed["model"] {
+		t.Fatalf("expected model check to fail, got %+v", failed)
+	}
+	if bad, _ := f.call("POST", fmt.Sprintf("/api/deployments/%d/start", dep.ID), nil, f.cookie, "http://example.com"); bad.Code != 422 {
+		t.Fatalf("start must be refused while self-check fails, got %d", bad.Code)
+	}
+
+	// Operator path: register a model file and publish it. The file content
+	// does not need to be a real ONNX model for the start gate; inference
+	// then fails honestly (no worker), but the deployment must run and stay
+	// offline without a stream — and must never fabricate events.
+	modelFile := filepath.Join(t.TempDir(), "model.onnx")
+	if err := os.WriteFile(modelFile, []byte("not-a-real-onnx-model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var model models.AlgoModel
+	if err := f.db.Where("code = ?", "grab_bucket_seg").First(&model).Error; err != nil {
+		t.Fatal(err)
+	}
+	e = f.ok("POST", "/api/algorithms/model-versions", map[string]any{
+		"model_id": model.ID, "version": "v-test", "adapter": "onnx", "file_path": modelFile,
+	})
+	var mv struct {
+		ID uint `json:"id"`
+	}
+	json.Unmarshal(e.Data, &mv)
+	f.ok("POST", fmt.Sprintf("/api/algorithms/model-versions/%d/publish", mv.ID), nil)
+	if err := f.db.Model(&models.BusinessTemplate{}).Where("id = ?", tpl.ID).
+		Update("model_version_id", mv.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	f.ok("POST", fmt.Sprintf("/api/deployments/%d/start", dep.ID), nil)
 
+	// No stream is configured for this camera: the runtime must report
+	// offline with a heartbeat, and no events may appear.
 	deadline := time.Now().Add(5 * time.Second)
+	var rt struct {
+		State      string `json:"state"`
+		LastResult string `json:"last_result"`
+		Heartbeat  string `json:"heartbeat_at"`
+	}
 	for time.Now().Before(deadline) {
-		var n int64
-		f.db.Model(&models.VideoEvent{}).Where("camera_id = ?", cam.ID).Count(&n)
-		if n > 0 {
+		e = f.ok("GET", "/api/reports/runtime", nil)
+		var rows []struct {
+			DeploymentID uint `json:"deployment_id"`
+			State        string `json:"state"`
+			LastResult   string `json:"last_result"`
+			HeartbeatAt  string `json:"heartbeat_at"`
+		}
+		json.Unmarshal(e.Data, &rows)
+		for _, r := range rows {
+			if r.DeploymentID == dep.ID {
+				rt.State, rt.LastResult, rt.Heartbeat = r.State, r.LastResult, r.HeartbeatAt
+			}
+		}
+		if rt.LastResult == "offline" && rt.Heartbeat != "" {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	var n int64
-	f.db.Model(&models.VideoEvent{}).Where("camera_id = ?", cam.ID).Count(&n)
-	if n == 0 {
-		t.Fatal("expected video event from mock runtime")
+	if rt.LastResult != "offline" {
+		t.Fatalf("expected offline runtime without frames, got %+v", rt)
+	}
+	if rt.Heartbeat == "" {
+		t.Fatal("heartbeat must keep updating while offline")
+	}
+	var events int64
+	f.db.Model(&models.VideoEvent{}).Where("camera_id = ?", cam.ID).Count(&events)
+	if events != 0 {
+		t.Fatalf("offline deployment fabricated %d events", events)
 	}
 
 	f.ok("GET", "/api/reports/summary", nil)

@@ -100,7 +100,7 @@ type AlgoModelVersion struct {
 	Status       string     `gorm:"size:32;not null;default:draft;index" json:"status"` // draft | validating | published | archived
 	FilePath     string     `gorm:"size:512" json:"file_path"`
 	Checksum     string     `gorm:"size:128" json:"checksum"`
-	Adapter      string     `gorm:"size:64;not null;default:mock" json:"adapter"` // mock | onnx
+	Adapter      string     `gorm:"size:64;not null;default:onnx" json:"adapter"` // onnx | (registered adapters)
 	InputSchema  string     `gorm:"type:text" json:"input_schema"`
 	OutputSchema string     `gorm:"type:text" json:"output_schema"`
 	ClassesJSON  string     `gorm:"type:text" json:"classes_json"`

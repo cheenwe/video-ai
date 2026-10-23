@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -146,15 +147,12 @@ func (h *BoundaryHandler) Rollback(c *gin.Context) {
 
 func (h *BoundaryHandler) Candidate(c *gin.Context) {
 	camID, _ := strconv.Atoi(c.Query("camera_id"))
-	w, _ := strconv.Atoi(c.DefaultQuery("width", "1280"))
-	hgt, _ := strconv.Atoi(c.DefaultQuery("height", "720"))
 	if camID < 1 {
 		response.BizFail(c, "需要 camera_id", 422)
 		return
 	}
-	g := videoai.SuggestBoundary(w, hgt)
-	response.OK(c, gin.H{
-		"camera_id": camID, "geometry": g, "ref_width": w, "ref_height": hgt,
-		"demo": true, "note": "演示候选边界，需人工校准后发布",
-	}, "")
+	// Automatic candidates require a real model running on live frames; the
+	// demo polyline generator was removed. Fail honestly instead of handing
+	// out fabricated geometry.
+	response.BizFail(c, "AI 候选需要真实模型推理（ONNX worker）与实时视频帧，当前不可用；请手动绘制边界", http.StatusNotImplemented)
 }

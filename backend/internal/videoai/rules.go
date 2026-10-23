@@ -12,7 +12,7 @@ const (
 	ResultOffline     = "offline"
 )
 
-// Detection is a mock/real grab bucket instance.
+// Detection is one grab bucket instance from the inference pipeline.
 type Detection struct {
 	Label      string  `json:"label"`
 	Confidence float64 `json:"confidence"`

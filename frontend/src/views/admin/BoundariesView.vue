@@ -27,12 +27,13 @@ async function load() {
 }
 
 async function candidate() {
+  // Automatic candidates need a real model running on live frames; the demo
+  // polyline generator was removed. The API fails honestly — surface why.
   try {
-    const res = await api.boundaryCandidate(cameraId.value);
-    pointsText.value = (res.geometry.points || []).map((p: any) => `${p.x},${p.y}`).join("\n");
-    toast.show(res.demo ? "已填充演示候选（需人工校准）" : "已填充候选");
+    await api.boundaryCandidate(cameraId.value);
+    toast.show("已获取候选");
   } catch (e) {
-    toast.show(e instanceof ApiError ? e.message : "获取候选失败");
+    toast.show(e instanceof ApiError ? e.message : "获取候选失败：需要真实模型推理与实时视频帧，请手动绘制");
   }
 }
 
@@ -96,7 +97,8 @@ onMounted(async () => { await loadCams(); await load(); });
             <label class="form-label">折线点（x,y 每行一个，参考 1280×720）</label>
             <textarea v-model="pointsText" class="form-control mb-2" rows="6" />
             <div class="btn-list">
-              <button class="btn" v-permission="'boundary:edit'" @click="candidate">AI 候选（演示）</button>
+              <button class="btn" v-permission="'boundary:edit'" @click="candidate"
+                title="需要真实模型推理（ONNX worker）与实时视频帧；当前不可用时会明确提示">AI 候选</button>
               <button class="btn btn-primary" v-permission="'boundary:edit'" @click="createDraft">保存草稿</button>
             </div>
           </div>

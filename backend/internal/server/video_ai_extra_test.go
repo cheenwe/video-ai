@@ -3,7 +3,11 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"baseplatform/internal/models"
 )
 
 // TestCameraImportReportsEveryRow checks that bulk import keeps going after a
@@ -77,7 +81,9 @@ func TestCameraProbeReportsUnreachableStream(t *testing.T) {
 		"code": "probe-1", "name": "Probe Cam", "access_type": "rtsp",
 		"main_url": "rtsp://127.0.0.1:1/stream",
 	})
-	var cam struct{ ID uint `json:"id"` }
+	var cam struct {
+		ID uint `json:"id"`
+	}
 	json.Unmarshal(e.Data, &cam)
 
 	e = f.ok("POST", fmt.Sprintf("/api/cameras/%d/probe", cam.ID), nil)
@@ -107,7 +113,9 @@ func TestPreviewWithoutStreamFailsHonestly(t *testing.T) {
 	e := f.ok("POST", "/api/cameras", map[string]any{
 		"code": "no-stream", "name": "No Stream", "access_type": "rtsp",
 	})
-	var cam struct{ ID uint `json:"id"` }
+	var cam struct {
+		ID uint `json:"id"`
+	}
 	json.Unmarshal(e.Data, &cam)
 
 	e, w := f.call("GET", fmt.Sprintf("/api/cameras/%d/frame.jpg", cam.ID), nil, f.cookie, "http://example.com")
@@ -125,10 +133,10 @@ func TestReportExposesOperationalMetrics(t *testing.T) {
 	e := f.ok("GET", "/api/reports/summary", nil)
 	var rep struct {
 		AnalysisQuality struct {
-			Ticks       int64   `json:"ticks"`
-			Unknown     int64   `json:"unknown"`
-			Offline     int64   `json:"offline"`
-			UnknownRate float64 `json:"unknown_rate"`
+			Ticks        int64   `json:"ticks"`
+			Unknown      int64   `json:"unknown"`
+			Offline      int64   `json:"offline"`
+			UnknownRate  float64 `json:"unknown_rate"`
 			Availability float64 `json:"availability"`
 		} `json:"analysis_quality"`
 		Offline struct {
@@ -158,7 +166,9 @@ func TestAccessDeviceProbeAndSync(t *testing.T) {
 		"kind": "gb28181", "code": "gb-1", "name": "国标设备一号",
 		"config": map[string]any{"host": "127.0.0.1", "port": 1, "device_id": "34020000001320000001"},
 	})
-	var dev struct{ ID uint `json:"id"` }
+	var dev struct {
+		ID uint `json:"id"`
+	}
 	json.Unmarshal(e.Data, &dev)
 
 	// Nothing is listening, so the probe must admit it rather than mark OK.
@@ -182,7 +192,9 @@ func TestAccessDeviceProbeAndSync(t *testing.T) {
 	e = f.ok("POST", "/api/access-devices", map[string]any{
 		"kind": "gb28181", "code": "gb-2", "name": "缺配置", "config": map[string]any{},
 	})
-	var dev2 struct{ ID uint `json:"id"` }
+	var dev2 struct {
+		ID uint `json:"id"`
+	}
 	json.Unmarshal(e.Data, &dev2)
 	e = f.ok("POST", fmt.Sprintf("/api/access-devices/%d/probe", dev2.ID), nil)
 	var pr2 struct {
@@ -195,6 +207,76 @@ func TestAccessDeviceProbeAndSync(t *testing.T) {
 	}
 }
 
+// TestUpdateTemplateIsPartialAndRejectsDraftVersion checks the operator path
+// that points a seeded template at a real published model: PUT accepts a
+// rebind-only body, keeps the untouched columns, and refuses a draft version.
+func TestUpdateTemplateIsPartialAndRejectsDraftVersion(t *testing.T) {
+	f := setup(t)
+	f.cookie = f.login("admin", "Adminpass123")
+
+	var tpl models.BusinessTemplate
+	if err := f.db.Where("code = ?", "grab_edge_guard").First(&tpl).Error; err != nil {
+		t.Fatal(err)
+	}
+	before := tpl
+
+	var model models.AlgoModel
+	if err := f.db.Where("code = ?", "grab_bucket_seg").First(&model).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// A draft version must never be bindable.
+	var draft models.AlgoModelVersion
+	if err := f.db.Where("model_id = ? AND status = ?", model.ID, "draft").First(&draft).Error; err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := f.call("PUT", fmt.Sprintf("/api/algorithms/templates/%d", tpl.ID),
+		map[string]any{"model_version_id": draft.ID}, f.cookie, "http://example.com"); e.Code != 422 {
+		t.Fatalf("draft version must be rejected, got %d: %s", e.Code, string(e.Data))
+	}
+
+	// Publish a real file, then rebind with a body that carries nothing else.
+	mvFile := filepath.Join(t.TempDir(), "partial.onnx")
+	if err := os.WriteFile(mvFile, []byte("onnx-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := f.ok("POST", "/api/algorithms/model-versions", map[string]any{
+		"model_id": model.ID, "version": "v-partial", "adapter": "onnx", "file_path": mvFile,
+	})
+	var mv struct {
+		ID uint `json:"id"`
+	}
+	json.Unmarshal(e.Data, &mv)
+	f.ok("POST", fmt.Sprintf("/api/algorithms/model-versions/%d/publish", mv.ID), nil)
+
+	f.ok("PUT", fmt.Sprintf("/api/algorithms/templates/%d", tpl.ID), map[string]any{
+		"model_version_id": mv.ID,
+	})
+
+	var after models.BusinessTemplate
+	if err := f.db.First(&after, tpl.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.ModelVersionID == nil || *after.ModelVersionID != mv.ID {
+		t.Fatalf("template not rebound: %+v", after.ModelVersionID)
+	}
+	if after.Name != before.Name {
+		t.Fatalf("rebind-only PUT must keep the name, got %q", after.Name)
+	}
+	if after.Description != before.Description {
+		t.Fatalf("rebind-only PUT must keep the description, got %q", after.Description)
+	}
+	if after.RuleCodesJSON != before.RuleCodesJSON {
+		t.Fatalf("rebind-only PUT must keep rule codes, got %q", after.RuleCodesJSON)
+	}
+
+	// An empty body is a client mistake, not a silent no-op.
+	if e, _ := f.call("PUT", fmt.Sprintf("/api/algorithms/templates/%d", tpl.ID),
+		map[string]any{}, f.cookie, "http://example.com"); e.Code != 422 {
+		t.Fatalf("empty PUT must be rejected, got %d", e.Code)
+	}
+}
+
 // TestEventClipsEndpointReturnsShape checks the recording centre can query
 // event clips for a camera.
 func TestEventClipsEndpointReturnsShape(t *testing.T) {
@@ -204,12 +286,14 @@ func TestEventClipsEndpointReturnsShape(t *testing.T) {
 	e := f.ok("POST", "/api/cameras", map[string]any{
 		"code": "clip-cam", "name": "Clip Cam", "access_type": "rtsp", "main_url": "rtsp://cam/9",
 	})
-	var cam struct{ ID uint `json:"id"` }
+	var cam struct {
+		ID uint `json:"id"`
+	}
 	json.Unmarshal(e.Data, &cam)
 
 	e = f.ok("GET", fmt.Sprintf("/api/cameras/%d/event-clips", cam.ID), nil)
 	var rows []struct {
-		Event     map[string]any `json:"event"`
+		Event     map[string]any   `json:"event"`
 		Evidences []map[string]any `json:"evidences"`
 	}
 	if err := json.Unmarshal(e.Data, &rows); err != nil {

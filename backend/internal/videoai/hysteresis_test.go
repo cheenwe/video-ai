@@ -103,17 +103,24 @@ func TestAnalysisInterval(t *testing.T) {
 }
 
 func TestAdapterRegistry(t *testing.T) {
-	mock, err := AdapterByName("mock")
-	if err != nil || !mock.Demo() {
-		t.Fatalf("mock adapter: %v demo=%v", err, mock != nil && mock.Demo())
+	// Production must not carry a demo adapter.
+	for _, a := range RegisteredAdapters() {
+		if name, _ := a["name"].(string); name == "mock" {
+			t.Fatal("mock adapter must not be registered in production")
+		}
+		if demo, _ := a["demo"].(bool); demo {
+			t.Fatalf("demo adapter %v registered in production", a["name"])
+		}
 	}
 	onnx, err := AdapterByName("onnx")
 	if err != nil || onnx.Demo() {
 		t.Fatalf("onnx adapter registered: %v", err)
 	}
-	// The onnx placeholder must refuse to fabricate detections.
-	if dets, err := onnx.Infer(1, time.Now(), 1280, 720); err == nil || dets != nil {
-		t.Fatal("onnx placeholder must fail loudly, not synthesize results")
+	// Without a worker/model the onnx adapter must fail loudly instead of
+	// synthesizing detections.
+	cfg := ModelConfig{Adapter: "onnx", InputW: 640, InputH: 640, Classes: []string{"grab_bucket"}}
+	if dets, err := onnx.Infer(1, Frame{}, cfg); err == nil || dets != nil {
+		t.Fatal("onnx adapter must fail without a worker, not synthesize results")
 	}
 	if _, err := AdapterByName("nope"); err == nil {
 		t.Fatal("unknown adapter should error")
