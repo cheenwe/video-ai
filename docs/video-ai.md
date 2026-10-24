@@ -118,15 +118,31 @@ pip install -r backend/workers/onnx/requirements.txt   # onnxruntime + numpy
 - 布控 `schedule_cron` 为空表示始终分析；非法表达式在保存时被拒绝（422），启动前自检失败，运行中上报 `unknown`——**不会**静默按始终分析处理。
 - 静音（`mute_notify`）时仍记录事件，不发通知。
 
+## 实现对照（M0–M6）
+
+对照表反映**当前仓库的真实状态**，不等于归档规格已全部交付；`partial` 项的具体边界见下一节「明确限制」。
+
+| 里程碑 | 能力 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| M0 | 菜单/权限/种子 | OK | 种子只建 onnx **草稿**版本（无模型文件不得发布）；旧库 mock 版本归档、模板改绑、framework 列纠正 |
+| M1 | 摄像头 CRUD / 拨测 / CSV 导入 | OK | 分组、码流版本、拨测探测、逐行反馈的批量导入；列表码流改 `IN` 批量预取 |
+| M2 | 预览 / 边界 / 布控 / 时段 | OK | HLS + MJPEG 预览、边界版本与校验、布控启停与滞回；AI 坑边候选见 M3 |
+| M3 | 真实帧 + ONNX worker | OK | 主二进制无 ORT 依赖；需 `pip install` worker 与真实模型文件；**本机未安装 onnxruntime 时自检如实失败** |
+| M3a | AI 坑边候选 | OK | 实时帧 + 已发布模型 + 模型含坑边类才出候选；否则明确 422/503，绝不返回写死折线 |
+| M4 | 告警 / 报表 / 证据 / 录像 | OK | 事件合并与处置、截图与事件片段、报表含分析质量与离线时长；直连码流平台录制（分段 + 保留策略 + 重启恢复） |
+| M5 | 自检 / 长跑 | OK | `/api/video/self-check` 14 项；soak 双模式（真机 / fail-closed），缺 worker 时 exit 3 BLOCKED |
+| M6 | GB28181 / 推流接入 | partial | 信令探测（SIP OPTIONS）与媒体拨测已对接真实协议；**注册/目录/Invite 媒体会话未与真机联验** |
+
 ## 明确限制
 
 - **无演示适配器**：mock 已从生产注册、种子与文档移除；无帧时布控报 `offline`（`analysis_status=waiting_video`），不伪造心跳、不合成检测。
 - **ONNX Runtime 不在主二进制内**：推理经独立 worker（`backend/workers/onnx`）。worker 未安装时 `/api/video/self-check` 的 `onnx_worker` 项失败，模型版本自检失败——这是诚实失败，不是缺陷。当前仅验证过 CPU provider；GPU（CUDA）需在 worker 环境启用。
 - **模型输出布局假设 YOLO detect**（`[1, 4+nc, N]` 或 `[1, N, 4+nc]`）；其他布局需在 `internal/videoai/postprocess.go` 扩展解码。
-- **自动坑边候选不可用**：演示折线生成器已移除；AI 候选需真实模型推理（当前接口明确返回不可用）。
+- **AI 坑边候选的条件**：需要实时帧 + 已发布模型 + 模型输出含「坑边/边界」类（标签含 `edge`/`border`/`boundary`/`坑边` 等）。仅有抓斗类的模型会被明确拒绝（422），不会用抓斗框猜边界；候选只是建议，仍需人工确认后保存。
+- **平台录制的边界**：仅覆盖平台能自己拉流的直连码流（ffmpeg 流复制，5 分钟分段）。NVR 通道由 nvr-agent 录制，平台不重复录；`event_only` 不产生连续录像。`schedule` 模式需要 `schedule_json`（`{"windows":[{"from":"08:00","to":"18:00","days":[1,2,3,4,5]}]}`，`from > to` 表示跨零点），缺失或非法会拒绝启动而不是悄悄 24 小时连录。
 - **MJPEG 预览路数上限**：并发预览连接默认 32（`BASE_VIDEO_AI_MAX_PREVIEW`）；同一摄像头的多个面板复用同一个取流解码器，超限时面板提示「超过服务端预览上限」。
 - **GB28181 / 推流**：信令探测（SIP OPTIONS）与媒体拨测已对接真实协议；完整注册 / 媒体会话未与真机联验，按实际设备推进。
-- **直连 RTSP 连续录像未接入**：录像计划可保存，执行依赖 nvr-agent；事件片段（clip.mp4）来自取流缓冲环。
+- **NVR 通道录像仍由 nvr-agent 执行**：平台侧录制只处理直连码流；事件片段（clip.mp4）来自取流缓冲环。
 - NVR 预览/录像仍走 [nvr.md](nvr.md)；平台摄像头是统一业务实体。
 - 已有库的 `admin` 角色不会自动获得新增权限点，需在角色页勾选。
 - **历史库迁移**：启动时种子会把绑定到旧 mock 版本的模板改绑到 onnx 版本，并将旧 mock 版本归档；运行适配器始终以模型版本的 `adapter` 字段为准。

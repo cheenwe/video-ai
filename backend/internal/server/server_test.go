@@ -1,6 +1,11 @@
 package server
 
 import (
+	"baseplatform/internal/config"
+	"baseplatform/internal/database"
+	"baseplatform/internal/models"
+	"baseplatform/internal/security"
+	"baseplatform/internal/settings"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -9,11 +14,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"baseplatform/internal/config"
-	"baseplatform/internal/database"
-	"baseplatform/internal/models"
-	"baseplatform/internal/security"
-	"baseplatform/internal/settings"
 )
 
 type envelope struct {
@@ -27,6 +27,7 @@ type fixture struct {
 	db     *gorm.DB
 	cookie *http.Cookie
 	t      *testing.T
+	cfg    *config.Config
 }
 
 func setup(t *testing.T) *fixture {
@@ -42,7 +43,7 @@ func setup(t *testing.T) *fixture {
 	if e = db.Create(&models.User{Username: "admin", PasswordHash: hash, Role: "superadmin", WebLoginEnabled: 1, Timezone: "Asia/Shanghai"}).Error; e != nil {
 		t.Fatal(e)
 	}
-	return &fixture{r: New(cfg, db, ""), db: db, t: t}
+	return &fixture{r: New(cfg, db, ""), db: db, t: t, cfg: cfg}
 }
 func (f *fixture) call(method, path string, body any, cookie *http.Cookie, origin string) (envelope, *httptest.ResponseRecorder) {
 	f.t.Helper()

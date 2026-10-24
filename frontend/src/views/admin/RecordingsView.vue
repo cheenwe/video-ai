@@ -19,6 +19,9 @@ const probing = ref<Record<number, boolean>>({});
 // Event clips are produced by the ingest buffer when an incident fires.
 const clips = ref<api.EventClip[]>([]);
 const loadingClips = ref(false);
+// Platform-side recording (direct RTSP) — separate from the NVR agent list.
+const platformRec = ref<api.PlatformRecordings | null>(null);
+const loadingPlatform = ref(false);
 
 const isNvrBound = computed(() => !!selected.value?.nvr_agent_id && !!selected.value?.agent_camera_id);
 
@@ -45,9 +48,36 @@ async function select(c: Camera) {
     // plan endpoint always answers with a default; ignore errors
   }
   await loadClips();
+  platformRec.value = null;
   if (isNvrBound.value) {
     await loadRecordings();
+  } else {
+    await loadPlatformRecordings();
   }
+}
+
+async function loadPlatformRecordings() {
+  if (!selected.value) return;
+  loadingPlatform.value = true;
+  try {
+    platformRec.value = await api.cameraRecordings(selected.value.id);
+  } catch (e) {
+    platformRec.value = null;
+    toast.show(e instanceof ApiError ? e.message : "平台录像列表获取失败");
+  } finally {
+    loadingPlatform.value = false;
+  }
+}
+
+function playPlatform(seg: api.PlatformSegment) {
+  if (!selected.value) return;
+  playing.value = api.cameraRecordingURL(selected.value.id, seg.name);
+}
+
+function fmtDuration(ms: number) {
+  if (!ms) return "录制中";
+  const s = Math.round(ms / 1000);
+  return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
 }
 
 async function loadClips() {
@@ -93,7 +123,14 @@ async function savePlan() {
   planSaving.value = true;
   try {
     plan.value = await api.saveRecordingPlan(selected.value.id, plan.value);
-    toast.show("录像计划已保存（NVR 通道由 nvr-agent 执行录制；直连 RTSP 录制流水线尚未接入）");
+    toast.show("录像计划已保存");
+    // Reload the segment list right away: its state block reports whether the
+    // recorder actually started, so "saved" never implies "recording".
+    if (isNvrBound.value) {
+      await loadRecordings();
+    } else {
+      await loadPlatformRecordings();
+    }
   } catch (e) {
     toast.show(e instanceof ApiError ? e.message : "保存失败");
   } finally {
@@ -157,10 +194,10 @@ onMounted(load);
               <div class="row g-2">
                 <div class="col-md-3">
                   <label class="form-label">模式</label>
-                  <select v-model="plan.mode" class="form-select" :disabled="!isNvrBound">
+                  <select v-model="plan.mode" class="form-select">
                     <option value="off">关闭</option>
                     <option value="continuous">持续</option>
-                    <option value="schedule">计划</option>
+                    <option value="schedule">按计划时段</option>
                     <option value="event_only">仅事件</option>
                   </select>
                 </div>
@@ -176,21 +213,68 @@ onMounted(load);
                   <button class="btn btn-primary" v-permission="'camera:record'" :disabled="planSaving" @click="savePlan">保存计划</button>
                 </div>
               </div>
+              <div v-if="plan.mode === 'schedule'" class="mt-2">
+                <label class="form-label">时段定义（JSON）</label>
+                <input v-model="plan.schedule_json" class="form-control" placeholder='{"windows":[{"from":"08:00","to":"18:00","days":[1,2,3,4,5]}]}' />
+                <div class="form-hint">days 为 ISO 星期（1=周一…7=周日），省略表示每天；from &gt; to 表示跨零点。</div>
+              </div>
               <div v-if="!isNvrBound" class="alert alert-info small mt-2 mb-0">
-                该摄像头未绑定 NVR 通道。录像计划可保存，但当前录制执行依赖 nvr-agent；直连 RTSP 的平台录像流水线尚未接入。
+                该摄像头直连码流：平台用 ffmpeg 流复制分段录制到服务端磁盘（每段 5 分钟），按保留天数与容量上限自动清理。
+                「仅事件」不产生连续录像，仅依赖事件片段。
               </div>
             </div>
           </div>
 
-          <div class="card">
+          <div class="card" v-if="!isNvrBound">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <h3 class="card-title mb-0">平台录像（直连码流）</h3>
+              <button class="btn btn-sm" :disabled="loadingPlatform" @click="loadPlatformRecordings">刷新</button>
+            </div>
+            <div class="card-body" v-if="platformRec">
+              <div class="d-flex flex-wrap gap-3 small">
+                <span>
+                  状态：
+                  <span class="badge" :class="platformRec.state.recording ? 'bg-danger' : platformRec.state.paused ? 'bg-warning text-dark' : 'bg-secondary'">
+                    {{ platformRec.state.recording ? "录制中" : platformRec.state.paused ? "时段外暂停" : "未录制" }}
+                  </span>
+                </span>
+                <span>分段 {{ platformRec.state.segments }} 个</span>
+                <span>占用 {{ fmtSize(platformRec.state.bytes) }}</span>
+                <span class="text-secondary text-truncate" :title="platformRec.state.dir">{{ platformRec.state.dir }}</span>
+              </div>
+              <div v-if="platformRec.state.last_error" class="alert alert-warning small mt-2 mb-0">
+                录制进程：{{ platformRec.state.last_error }}（码流不可达时会每 10 秒重试）
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-vcenter card-table">
+                <thead><tr><th>文件</th><th>大小</th><th>开始时间</th><th>时长</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-if="loadingPlatform"><td colspan="5" class="text-secondary">加载中…</td></tr>
+                  <tr v-else-if="!platformRec || !platformRec.segments.length">
+                    <td colspan="5" class="text-secondary">暂无分段。计划为「持续」或「按计划时段」时才会生成。</td>
+                  </tr>
+                  <tr v-for="s in platformRec?.segments || []" :key="s.name">
+                    <td class="text-truncate" style="max-width: 260px">{{ s.name }}</td>
+                    <td>{{ fmtSize(s.size_bytes) }}</td>
+                    <td>{{ new Date(s.started_at).toLocaleString() }}</td>
+                    <td>{{ fmtDuration(s.duration_ms) }}</td>
+                    <td class="text-end">
+                      <button class="btn btn-sm" @click="playPlatform(s)">播放</button>
+                      <a class="btn btn-sm btn-outline-primary ms-1" :href="api.cameraRecordingURL(selected!.id, s.name)" download>下载</a>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card" v-else>
             <div class="card-header d-flex justify-content-between align-items-center">
               <h3 class="card-title mb-0">录像文件（NVR 通道）</h3>
-              <button v-if="isNvrBound" class="btn btn-sm" :disabled="loadingRec" @click="loadRecordings">刷新</button>
+              <button class="btn btn-sm" :disabled="loadingRec" @click="loadRecordings">刷新</button>
             </div>
-            <div class="card-body" v-if="!isNvrBound">
-              <div class="text-secondary">非 NVR 通道摄像头暂无录像来源。</div>
-            </div>
-            <div class="table-responsive" v-else>
+            <div class="table-responsive">
               <table class="table table-vcenter card-table">
                 <thead><tr><th>文件</th><th>大小</th><th>时间</th><th>状态</th><th></th></tr></thead>
                 <tbody>

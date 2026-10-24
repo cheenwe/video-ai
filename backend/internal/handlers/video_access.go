@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"baseplatform/internal/models"
 	"baseplatform/internal/response"
 	"baseplatform/internal/services"
+	"baseplatform/internal/videoai/recorder"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -139,9 +141,13 @@ func (h *AccessHandler) Delete(c *gin.Context) {
 	response.OK(c, nil, "已删除")
 }
 
-// RecordingPlanHandler manages per-camera retain policies.
+// RecordingPlanHandler manages per-camera retain policies and, for cameras the
+// platform can pull itself, starts/stops platform-side recording.
 type RecordingPlanHandler struct {
 	DB *gorm.DB
+	// Recorder is optional; nil keeps plans advisory-only (NVR agent does the
+	// recording) which is how the platform behaves without it.
+	Recorder *recorder.Manager
 }
 
 func (h *RecordingPlanHandler) Get(c *gin.Context) {
@@ -179,5 +185,94 @@ func (h *RecordingPlanHandler) Save(c *gin.Context) {
 	u := middleware.CurrentUser(c)
 	services.LogAction(h.DB, c, "audit", "success", "recording.plan.save", &u, fmt.Sprintf("cam=%d", camID))
 	_ = h.DB.Where("camera_id = ?", camID).First(&plan)
-	response.OK(c, plan, "已保存")
+
+	// Apply the plan to the platform recorder. Failures are reported in the
+	// response instead of being swallowed: a plan that says "continuous" while
+	// nothing records is worse than an explicit error.
+	msg := "已保存"
+	if h.Recorder != nil {
+		if err := h.applyRecordingPlan(plan); err != nil {
+			msg = "计划已保存，但平台录制未启动：" + err.Error()
+		} else if plan.Mode == "continuous" || plan.Mode == "schedule" {
+			msg = "已保存，平台录制已按计划应用"
+		}
+	}
+	response.OK(c, plan, msg)
+}
+
+// applyRecordingPlan reconciles the recorder with a saved plan. Only direct
+// streams are recorded here: NVR-bound cameras record on the agent side, and
+// event_only/off mean no continuous process.
+func (h *RecordingPlanHandler) applyRecordingPlan(plan models.RecordingPlan) error {
+	camID := plan.CameraID
+	if plan.Enabled == 0 || (plan.Mode != "continuous" && plan.Mode != "schedule") {
+		h.Recorder.Stop(camID)
+		return nil
+	}
+	var cam models.Camera
+	if err := h.DB.First(&cam, camID).Error; err != nil {
+		return fmt.Errorf("摄像头不存在")
+	}
+	if cam.NVRAgentID != nil && cam.AgentCameraID != "" {
+		// NVR-bound: the agent owns recording; do not double-record.
+		h.Recorder.Stop(camID)
+		return nil
+	}
+	url := streamURL(h.DB, camID)
+	if url == "" {
+		return fmt.Errorf("摄像头未配置码流地址")
+	}
+	scheduleJSON := ""
+	if plan.Mode == "schedule" {
+		if plan.ScheduleJSON == "" {
+			return fmt.Errorf("schedule 模式需要 schedule_json 时段定义")
+		}
+		scheduleJSON = plan.ScheduleJSON
+	}
+	return h.Recorder.Start(camID, url, plan.RetainDays, plan.MaxGB, scheduleJSON)
+}
+
+// Recordings lists the platform-recorded segments for a camera, plus the live
+// recorder state so the UI can tell "nothing recorded" from "recorder broken".
+func (h *RecordingPlanHandler) Recordings(c *gin.Context) {
+	camID, _ := strconv.Atoi(c.Param("id"))
+	var cam models.Camera
+	if h.DB.First(&cam, camID).Error != nil {
+		response.BizFail(c, "摄像头不存在", 404)
+		return
+	}
+	if h.Recorder == nil {
+		response.BizFail(c, "平台录制未启用", http.StatusServiceUnavailable)
+		return
+	}
+	segs, err := h.Recorder.List(uint(camID))
+	if err != nil {
+		response.BizFail(c, "读取录像目录失败："+err.Error(), 500)
+		return
+	}
+	response.OK(c, gin.H{
+		"camera_id": uint(camID),
+		"state":     h.Recorder.Status(uint(camID)),
+		"segments":  segs,
+		"nvr_bound": cam.NVRAgentID != nil && cam.AgentCameraID != "",
+	}, "")
+}
+
+// RecordingFile serves one recorded segment. Names are validated by the
+// recorder so a crafted name cannot escape the camera directory.
+func (h *RecordingPlanHandler) RecordingFile(c *gin.Context) {
+	camID, _ := strconv.Atoi(c.Param("id"))
+	name := c.Param("name")
+	if h.Recorder == nil {
+		response.BizFail(c, "平台录制未启用", http.StatusServiceUnavailable)
+		return
+	}
+	path, err := h.Recorder.SegmentPath(uint(camID), name)
+	if err != nil {
+		response.BizFail(c, err.Error(), 404)
+		return
+	}
+	c.Header("Content-Type", "video/mp4")
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", name))
+	c.File(path)
 }

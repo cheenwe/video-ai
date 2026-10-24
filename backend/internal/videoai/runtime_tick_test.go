@@ -306,3 +306,38 @@ func TestSeedMigratesLegacyMockBinding(t *testing.T) {
 		t.Fatalf("template still bound to %q", mv.Adapter)
 	}
 }
+
+// TestSeedCorrectsLegacyMockFramework: a legacy AlgoModel row labelled
+// framework=mock is corrected to onnx. The label is what the algorithm page
+// shows, so a stale one makes a real onnx model look like a demo.
+func TestSeedCorrectsLegacyMockFramework(t *testing.T) {
+	db := tickTestDB(t)
+	if err := SeedDefaults(db); err != nil {
+		t.Fatal(err)
+	}
+	var model models.AlgoModel
+	db.Where("code = ?", "grab_bucket_seg").First(&model)
+	if err := db.Model(&model).Update("framework", "mock").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SeedDefaults(db); err != nil {
+		t.Fatal(err)
+	}
+	var after models.AlgoModel
+	db.First(&after, model.ID)
+	if after.Framework != "onnx" {
+		t.Fatalf("framework not corrected: %q", after.Framework)
+	}
+	// Correction must not fabricate a version or touch the existing one.
+	var drafts int64
+	db.Model(&models.AlgoModelVersion{}).Where("model_id = ? AND adapter = ?", model.ID, "mock").Count(&drafts)
+	if drafts != 0 {
+		t.Fatalf("seed created %d mock versions", drafts)
+	}
+	var versions int64
+	db.Model(&models.AlgoModelVersion{}).Where("model_id = ?", model.ID).Count(&versions)
+	if versions != 1 {
+		t.Fatalf("expected the single seeded v1, got %d versions", versions)
+	}
+}

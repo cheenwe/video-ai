@@ -10,6 +10,12 @@ const cameras = ref<Camera[]>([]);
 const cameraId = ref(0);
 const items = ref<BoundaryVersion[]>([]);
 const pointsText = ref("100,400\n640,420\n1180,400");
+// Reference frame the polyline is expressed in. An AI candidate overwrites
+// these with the real frame size it inferred on, so the geometry is not
+// silently rescaled against a guessed 1280x720.
+const refW = ref(1280);
+const refH = ref(720);
+const pitSide = ref<"above" | "below">("below");
 
 async function loadCams() {
   const res = await api.listCameras({ page: 1, page_size: 100 });
@@ -26,14 +32,29 @@ async function load() {
   }
 }
 
+const candidateInfo = ref("");
+
 async function candidate() {
-  // Automatic candidates need a real model running on live frames; the demo
-  // polyline generator was removed. The API fails honestly — surface why.
+  // The endpoint infers on a fresh live frame with a published model and
+  // returns a suggested polyline. When there is no frame, no published model,
+  // or the model cannot see the pit edge, it fails with the reason — that
+  // reason is surfaced verbatim instead of being swallowed.
   try {
-    await api.boundaryCandidate(cameraId.value);
-    toast.show("已获取候选");
+    const res = await api.boundaryCandidate(cameraId.value);
+    const pts = res.geometry?.points || [];
+    if (pts.length < 2) {
+      toast.show("候选未返回有效折线");
+      return;
+    }
+    refW.value = res.ref_width || refW.value;
+    refH.value = res.ref_height || refH.value;
+    if (res.geometry.pit_side) pitSide.value = res.geometry.pit_side;
+    pointsText.value = pts.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join("\n");
+    candidateInfo.value = `候选来自模型 #${res.model_version_id}，坑边目标 ${res.edge_detections} 个，平均置信度 ${(res.confidence * 100).toFixed(0)}%；请核对后保存草稿`;
+    toast.show("已获取候选折线，请核对后保存草稿");
   } catch (e) {
-    toast.show(e instanceof ApiError ? e.message : "获取候选失败：需要真实模型推理与实时视频帧，请手动绘制");
+    candidateInfo.value = "";
+    toast.show(e instanceof ApiError ? e.message : "获取候选失败，请手动绘制");
   }
 }
 
@@ -46,9 +67,9 @@ async function createDraft() {
     await api.createBoundary({
       camera_id: cameraId.value,
       name: "draft",
-      ref_width: 1280,
-      ref_height: 720,
-      geometry: { kind: "polyline", pit_side: "below", buffer_norm: 0.02, points },
+      ref_width: refW.value,
+      ref_height: refH.value,
+      geometry: { kind: "polyline", pit_side: pitSide.value, buffer_norm: 0.02, points },
     });
     toast.show("已创建草稿");
     await load();
@@ -94,13 +115,31 @@ onMounted(async () => { await loadCams(); await load(); });
             <select v-model.number="cameraId" class="form-select mb-2" @change="load">
               <option v-for="c in cameras" :key="c.id" :value="c.id">{{ c.name }}</option>
             </select>
-            <label class="form-label">折线点（x,y 每行一个，参考 1280×720）</label>
+            <label class="form-label">折线点（x,y 每行一个，参考 {{ refW }}×{{ refH }}）</label>
             <textarea v-model="pointsText" class="form-control mb-2" rows="6" />
+            <div class="row g-2 mb-2">
+              <div class="col-4">
+                <label class="form-label">参考宽</label>
+                <input v-model.number="refW" type="number" class="form-control" />
+              </div>
+              <div class="col-4">
+                <label class="form-label">参考高</label>
+                <input v-model.number="refH" type="number" class="form-control" />
+              </div>
+              <div class="col-4">
+                <label class="form-label">坑侧</label>
+                <select v-model="pitSide" class="form-select">
+                  <option value="below">下方</option>
+                  <option value="above">上方</option>
+                </select>
+              </div>
+            </div>
             <div class="btn-list">
               <button class="btn" v-permission="'boundary:edit'" @click="candidate"
-                title="需要真实模型推理（ONNX worker）与实时视频帧；当前不可用时会明确提示">AI 候选</button>
+                title="用已发布模型在当前实时帧上推理，返回候选折线；无帧/无模型/模型无坑边类时会明确报错">AI 候选</button>
               <button class="btn btn-primary" v-permission="'boundary:edit'" @click="createDraft">保存草稿</button>
             </div>
+            <div v-if="candidateInfo" class="text-secondary small mt-2">{{ candidateInfo }}</div>
           </div>
         </div>
       </div>

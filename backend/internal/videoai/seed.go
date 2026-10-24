@@ -36,6 +36,14 @@ func SeedDefaults(db *gorm.DB) error {
 		if err := db.Create(&model).Error; err != nil {
 			return err
 		}
+	} else if err == nil && model.Framework != "onnx" {
+		// Legacy databases kept a "mock" framework label while their versions
+		// were already migrated to onnx. The column is only a label (runtime
+		// uses AlgoModelVersion.Adapter), but leaving it stale makes the
+		// algorithm page claim a model is a demo long after it stopped being
+		// one. This is a label correction, not a new model version.
+		_ = db.Model(&model).Update("framework", "onnx").Error
+		model.Framework = "onnx"
 	}
 
 	// The shipped version is a draft without a file: publishing requires a

@@ -1,21 +1,25 @@
 package server
 
 import (
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 	"baseplatform/internal/avatars"
 	"baseplatform/internal/config"
 	"baseplatform/internal/handlers"
 	"baseplatform/internal/license"
 	"baseplatform/internal/middleware"
+	"baseplatform/internal/models"
 	"baseplatform/internal/scheduler"
 	"baseplatform/internal/services"
 	"baseplatform/internal/storage"
 	"baseplatform/internal/upgrade"
 	"baseplatform/internal/videoai"
+	"baseplatform/internal/videoai/recorder"
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -23,9 +27,29 @@ import (
 
 type Application struct {
 	Router        *gin.Engine
+	DB            *gorm.DB
 	Scheduler     *scheduler.Manager
 	Notifications *services.NotificationService
 	VideoAI       *videoai.Manager
+	Recorder      *recorder.Manager
+}
+
+// streamURLOf resolves a camera's main (or first) stream URL, mirroring what
+// the handlers use for previews.
+func streamURLOf(db *gorm.DB, cameraID uint) string {
+	var streams []models.StreamProfile
+	db.Where("camera_id = ? AND enabled = 1", cameraID).Order("id asc").Find(&streams)
+	for _, s := range streams {
+		if s.Role == "main" && s.URL != "" {
+			return s.URL
+		}
+	}
+	for _, s := range streams {
+		if s.URL != "" {
+			return s.URL
+		}
+	}
+	return ""
 }
 
 func (a *Application) Start() error {
@@ -37,9 +61,50 @@ func (a *Application) Start() error {
 	if a.VideoAI != nil {
 		a.VideoAI.Start()
 	}
+	if a.Recorder != nil {
+		a.restoreRecordingPlans()
+		go a.Recorder.RunHousekeeping(context.Background(), 10*time.Minute)
+	}
 	return nil
 }
+
+// restoreRecordingPlans re-applies saved plans at boot. Without it every
+// deploy silently stops the archive until an operator re-saves the plan.
+func (a *Application) restoreRecordingPlans() {
+	if a.DB == nil {
+		return
+	}
+	var plans []models.RecordingPlan
+	if err := a.DB.Where("enabled = 1 AND mode IN ?", []string{"continuous", "schedule"}).Find(&plans).Error; err != nil {
+		log.Printf("[recorder] 读取录像计划失败: %v", err)
+		return
+	}
+	for _, plan := range plans {
+		var cam models.Camera
+		if err := a.DB.First(&cam, plan.CameraID).Error; err != nil {
+			continue
+		}
+		if cam.NVRAgentID != nil && cam.AgentCameraID != "" {
+			continue // NVR-bound cameras record on the agent
+		}
+		url := streamURLOf(a.DB, cam.ID)
+		if url == "" {
+			log.Printf("[recorder] 摄像头 %d 未配置码流，跳过录制恢复", cam.ID)
+			continue
+		}
+		scheduleJSON := ""
+		if plan.Mode == "schedule" {
+			scheduleJSON = plan.ScheduleJSON
+		}
+		if err := a.Recorder.Start(cam.ID, url, plan.RetainDays, plan.MaxGB, scheduleJSON); err != nil {
+			log.Printf("[recorder] 恢复摄像头 %d 录制失败: %v", cam.ID, err)
+		}
+	}
+}
 func (a *Application) Stop() {
+	if a.Recorder != nil {
+		a.Recorder.StopAll()
+	}
 	if a.VideoAI != nil {
 		a.VideoAI.Stop()
 	}
@@ -123,7 +188,9 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	eventH := &handlers.EventHandler{DB: db, RBAC: rbacSvc}
 	reportH := &handlers.ReportHandler{DB: db}
 	accessH := &handlers.AccessHandler{DB: db}
-	recPlanH := &handlers.RecordingPlanHandler{DB: db}
+	recorderMgr := recorder.NewManager(cfg.DataHome)
+	recorderMgr.SetLogger(func(format string, args ...any) { log.Printf(format, args...) })
+	recPlanH := &handlers.RecordingPlanHandler{DB: db, Recorder: recorderMgr}
 	videoOpsH := &handlers.VideoOpsHandler{DB: db, DataHome: cfg.DataHome, Runtime: videoRuntime}
 	videoWSH := &handlers.VideoWSHandler{Runtime: videoRuntime}
 
@@ -351,6 +418,10 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 
 	admin.GET("/recording-plans/:cameraId", middleware.RequirePermission(db, "recording:list"), recPlanH.Get)
 	admin.PUT("/recording-plans/:cameraId", middleware.RequirePermission(db, "camera:record"), recPlanH.Save)
+	// :id (not :cameraId) because gin binds one wildcard name per path prefix
+	// and /cameras/:id is already taken by the camera CRUD routes.
+	admin.GET("/cameras/:id/recordings", middleware.RequirePermission(db, "recording:list"), recPlanH.Recordings)
+	admin.GET("/cameras/:id/recordings/:name", middleware.RequirePermission(db, "recording:list"), recPlanH.RecordingFile)
 	admin.GET("/video/self-check", middleware.RequirePermission(db, "overview:list"), videoOpsH.SelfCheck)
 	admin.GET("/video/ws", middleware.RequirePermission(db, "camera:live"), videoWSH.Stream)
 	admin.GET("/video/ingest", middleware.RequirePermission(db, "camera:live"), videoOpsH.IngestStates)
@@ -467,5 +538,8 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 			r.GET("/", func(c *gin.Context) { c.File(filepath.Join(frontend, "index.html")) })
 		}
 	}
-	return &Application{Router: r, Scheduler: schedMgr, Notifications: notifSvc, VideoAI: videoRuntime}, nil
+	return &Application{
+		Router: r, DB: db, Scheduler: schedMgr, Notifications: notifSvc,
+		VideoAI: videoRuntime, Recorder: recorderMgr,
+	}, nil
 }

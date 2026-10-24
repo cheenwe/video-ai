@@ -12,7 +12,14 @@
 
 ## 简介
 
-Video AI 管理平台源自 [NextFile](https://github.com/cheenwe/nextfile) 的 Go / Vue 项目基础能力模块迁移，提取出与具体业务（视频）解耦的通用平台底座。项目使用真实数据库与真实 API，不依赖模拟管理数据。
+Video AI 管理平台源自 [NextFile](https://github.com/cheenwe/nextfile) 的 Go / Vue 项目基础能力模块迁移，提取出与具体业务（视频）解耦的通用平台底座，并在其上内置了完整的视频 AI 管理闭环。项目使用真实数据库与真实 API，不依赖模拟管理数据。
+
+视频 AI 部分的关键事实（与 [English README](README.en.md) 一致）：
+
+- **只走真实链路**：RTSP 拉流 → ffmpeg 解码 → 真实帧送入 ONNX 推理 → 几何规则判定。**生产路径没有 mock/演示适配器**，取不到新鲜帧时布控报 `offline`，不伪造心跳、不合成检测。
+- **ONNX Runtime 不在主二进制**：推理由独立 Python worker 承担（`backend/workers/onnx`），主程序无 CGO/ORT 依赖；worker 缺失时自检如实失败。
+- **录像双通道**：NVR 通道由 nvr-agent 录制；直连码流由平台用 ffmpeg 流复制分段录制（持续 / 按计划时段），重启后按计划恢复。
+- 完整能力与**明确限制**（GB28181 完整会话、模型输出布局等）见 [视频 AI](docs/video-ai.md)。
 
 > 说明：仓库中 "Video AI" 品牌与命名沿用迁移来源约定；本开放仓库面向通用基础平台能力，可自行在底座上扩展。
 
@@ -26,6 +33,7 @@ Video AI 管理平台源自 [NextFile](https://github.com/cheenwe/nextfile) 的 
 - **运维能力**：操作/登录/审计日志、API 调用日志、计划任务、备份恢复、健康检查、运行概览
 - **通知与集成**：站内通知、Webhook 事件投递（HMAC 签名、指数退避重试）
 - **存储与授权**：本地 / S3(OSS) / FTP / SFTP / WebDAV 存储源；商业授权（社区版/旗舰版，RSA 签名授权文件）
+- **视频 AI（M0–M6）**：摄像头/码流/坑边边界/算法资产/布控/告警/证据/报表/实时推送/录像中心；真实帧推理 + 外部 ONNX worker；AI 坑边候选；平台侧直连录像。详见 [视频 AI](docs/video-ai.md)
 
 ## 技术栈
 

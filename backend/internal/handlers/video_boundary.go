@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"baseplatform/internal/middleware"
@@ -151,14 +152,110 @@ func (h *BoundaryHandler) Rollback(c *gin.Context) {
 	response.OK(c, nv, "已生成回滚草稿，请重新发布")
 }
 
+// Candidate suggests a pit-edge polyline from one real live frame. It runs the
+// published model on a fresh frame and derives geometry only from detections
+// the model calls "edge" — a bucket-only model produces an explicit 422 rather
+// than an invented line. The result is a draft suggestion: the operator still
+// reviews and posts it through the normal create endpoint.
 func (h *BoundaryHandler) Candidate(c *gin.Context) {
 	camID, _ := strconv.Atoi(c.Query("camera_id"))
 	if camID < 1 {
 		response.BizFail(c, "需要 camera_id", 422)
 		return
 	}
-	// Automatic candidates require a real model running on live frames; the
-	// demo polyline generator was removed. Fail honestly instead of handing
-	// out fabricated geometry.
-	response.BizFail(c, "AI 候选需要真实模型推理（ONNX worker）与实时视频帧，当前不可用；请手动绘制边界", http.StatusNotImplemented)
+	var cam models.Camera
+	if h.DB.First(&cam, camID).Error != nil || cam.Archived == 1 {
+		response.BizFail(c, "摄像头不存在", 404)
+		return
+	}
+	if h.Runtime == nil {
+		response.BizFail(c, "分析运行时未启用，无法取帧推理", http.StatusServiceUnavailable)
+		return
+	}
+	frame, ok := h.Runtime.FrameFor(cam.ID)
+	if !ok {
+		response.BizFail(c, "暂无新鲜视频帧（码流未配置或取流未连通），自动候选需要实时画面；请先确认预览正常或手动绘制", http.StatusServiceUnavailable)
+		return
+	}
+
+	mv, err := h.candidateModelVersion(c)
+	if err != nil {
+		response.BizFail(c, err.Error(), 422)
+		return
+	}
+	impl, err := videoai.AdapterByName(mv.Adapter)
+	if err != nil {
+		response.BizFail(c, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	cfg := videoai.ConfigForVersion(mv)
+	cfg.Classes = nil
+	if mv.ClassesJSON != "" {
+		_ = json.Unmarshal([]byte(mv.ClassesJSON), &cfg.Classes)
+	}
+	dets, err := impl.Infer(cam.ID, videoai.Frame{TS: frame.TS, JPEG: frame.JPEG, W: frame.W, H: frame.H}, cfg)
+	if err != nil {
+		// Worker missing / model failed: honest 503, never a fallback line.
+		response.BizFail(c, "推理失败，无法生成候选："+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	cand, err := videoai.DeriveBoundary(dets, frame.W, frame.H)
+	if err != nil {
+		response.BizFail(c, err.Error(), 422)
+		return
+	}
+	geom, _ := json.Marshal(cand.Geometry)
+	u := middleware.CurrentUser(c)
+	services.LogAction(h.DB, c, "audit", "success", "boundary.candidate", &u,
+		fmt.Sprintf("cam=%d edge=%d conf=%.2f", cam.ID, cand.EdgeDetections, cand.Confidence))
+	response.OK(c, gin.H{
+		"geometry":         json.RawMessage(geom),
+		"ref_width":        frame.W,
+		"ref_height":       frame.H,
+		"model_version_id": mv.ID,
+		"edge_detections":  cand.EdgeDetections,
+		"confidence":       cand.Confidence,
+		"note":             "候选由当前帧推理生成，需人工确认后再保存为边界版本",
+	}, "")
+}
+
+// candidateModelVersion resolves the model to run: an explicit
+// model_version_id wins, otherwise the published version bound to the first
+// published business template. Only published versions are candidates — a
+// draft has no proven output.
+func (h *BoundaryHandler) candidateModelVersion(c *gin.Context) (models.AlgoModelVersion, error) {
+	var mv models.AlgoModelVersion
+	if raw := c.Query("model_version_id"); raw != "" {
+		id, _ := strconv.Atoi(raw)
+		if h.DB.First(&mv, id).Error != nil {
+			return mv, fmt.Errorf("模型版本不存在")
+		}
+		if mv.Status != "published" {
+			return mv, fmt.Errorf("模型版本未发布，不能用于生成候选")
+		}
+		return mv, nil
+	}
+	// Walk published templates and take the first whose version is also
+	// published. The seeded template binds a draft (no model file yet), so
+	// stopping at the first template would report "unpublished" even when a
+	// usable model exists elsewhere.
+	var tpls []models.BusinessTemplate
+	h.DB.Where("status = ? AND model_version_id IS NOT NULL", "published").
+		Order("id asc").Find(&tpls)
+	if len(tpls) == 0 {
+		return mv, fmt.Errorf("没有可用的业务模板；请先发布绑定模型的模板，或用 model_version_id 指定模型版本")
+	}
+	var unpublished []string
+	for _, tpl := range tpls {
+		var cand models.AlgoModelVersion
+		if err := h.DB.First(&cand, *tpl.ModelVersionID).Error; err != nil {
+			continue
+		}
+		if cand.Status == "published" {
+			return cand, nil
+		}
+		unpublished = append(unpublished, tpl.Code+"→"+cand.Version)
+	}
+	return mv, fmt.Errorf("已发布的业务模板都没有绑定已发布的模型版本（%s）；请先发布模型版本，或用 model_version_id 指定",
+		strings.Join(unpublished, "、"))
 }

@@ -33,7 +33,7 @@ type Manager struct {
 	Ingest *ingest.Manager
 	// frames is the frame source used by analysis loops. It defaults to
 	// Ingest; tests replace it to inject deterministic frames.
-	frames frameSource
+	frames FrameSource
 	// Hub broadcasts analysis updates to live subscribers. Nil disables push.
 	Hub    *Hub
 	logger *log.Logger
@@ -64,11 +64,16 @@ type Manager struct {
 	appliedRev map[uint]int
 }
 
-// frameSource is the ingest surface the analysis loop needs.
-type frameSource interface {
+// FrameSource is the ingest surface the analysis loop needs.
+type FrameSource interface {
 	Ensure(cameraID uint, url string) error
 	Latest(cameraID uint) (ingest.Frame, bool)
 }
+
+// SetFrameSource replaces where analysis reads frames from. Production keeps
+// the ingest manager; tests and dry-run harnesses inject deterministic frames
+// through this seam instead of faking detections.
+func (m *Manager) SetFrameSource(fs FrameSource) { m.frames = fs }
 
 func NewManager(db *gorm.DB, dataHome string, bus *services.EventBus) *Manager {
 	ing := ingest.NewManager(dataHome)
@@ -133,6 +138,17 @@ func (m *Manager) cameraStreamURL(cameraID uint) string {
 		m.cacheStream.set(cacheKeyStream(cameraID), url)
 	}
 	return url
+}
+
+// FrameFor exposes the freshest decoded frame for a camera. The AI boundary
+// candidate uses it because a candidate must be derived from real pixels — if
+// there is no live frame the caller has to fail instead of guessing.
+func (m *Manager) FrameFor(cameraID uint) (ingest.Frame, bool) {
+	var cam models.Camera
+	if err := m.DB.First(&cam, cameraID).Error; err != nil {
+		return ingest.Frame{}, false
+	}
+	return m.frameFor(cam)
 }
 
 // frameFor returns the freshest decoded frame for a camera, if ingest is

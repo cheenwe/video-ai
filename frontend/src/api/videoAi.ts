@@ -123,8 +123,48 @@ export const rollbackBoundary = (id: number) => post<BoundaryVersion>(`/api/boun
 // Automatic boundary candidates require a real model on live frames; the
 // endpoint fails honestly (501) until then, so the geometry type is only a
 // placeholder for when real candidates exist.
-export const boundaryCandidate = (cameraId: number) =>
-  request<{ geometry: any; ref_width: number; ref_height: number }>(`/api/boundaries/candidate?camera_id=${cameraId}`);
+export const boundaryCandidate = (cameraId: number, modelVersionId?: number) =>
+  request<{
+    geometry: { kind: string; points: { x: number; y: number }[]; pit_side: string; buffer_norm: number };
+    ref_width: number;
+    ref_height: number;
+    model_version_id: number;
+    edge_detections: number;
+    confidence: number;
+    note: string;
+  }>(
+    `/api/boundaries/candidate?camera_id=${cameraId}` +
+      (modelVersionId ? `&model_version_id=${modelVersionId}` : ""),
+  );
+
+// Platform-side continuous recording (direct RTSP). NVR-bound cameras keep
+// using the agent's recording list instead.
+export interface PlatformSegment {
+  name: string;
+  size_bytes: number;
+  started_at: string;
+  duration_ms: number;
+}
+export interface PlatformRecorderState {
+  camera_id: number;
+  recording: boolean;
+  paused: boolean;
+  dir: string;
+  started_at?: string;
+  last_error?: string;
+  segments: number;
+  bytes: number;
+}
+export interface PlatformRecordings {
+  camera_id: number;
+  state: PlatformRecorderState;
+  segments: PlatformSegment[];
+  nvr_bound: boolean;
+}
+export const cameraRecordings = (cameraId: number) =>
+  request<PlatformRecordings>(`/api/cameras/${cameraId}/recordings`);
+export const cameraRecordingURL = (cameraId: number, name: string) =>
+  `/api/cameras/${cameraId}/recordings/${encodeURIComponent(name)}`;
 
 export const listModels = () => request<AlgoModel[]>("/api/algorithms/models");
 export const listRules = () => request<RuleVersion[]>("/api/algorithms/rules");
