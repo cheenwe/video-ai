@@ -1,6 +1,7 @@
 package videoai
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func TestHubPublishStatusKeepsOverlay(t *testing.T) {
 	rich := Update{
 		Type: "analysis", DeploymentID: 7, CameraID: 3,
 		Result: "near", Overlay: map[string]any{"ref_width": 1280.0},
-		TS:     time.Now(),
+		TS: time.Now(),
 	}
 	h.Publish(rich)
 	if got := <-ch; got.Result != "near" || got.Overlay == nil {
@@ -45,5 +46,39 @@ func TestHubPublishStatusKeepsOverlay(t *testing.T) {
 	got = <-ch
 	if got.Overlay != nil {
 		t.Fatalf("unexpected overlay on first status: %+v", got)
+	}
+}
+
+// BenchmarkHubPublishWithSubscribers measures fan-out cost. The hub encodes
+// once per update, so adding subscribers must not multiply the JSON work.
+func BenchmarkHubPublishWithSubscribers(b *testing.B) {
+	for _, subs := range []int{0, 1, 8, 16} {
+		b.Run(fmt.Sprintf("subs=%d", subs), func(b *testing.B) {
+			h := NewHub()
+			drain := make([]func(), 0, subs)
+			for i := 0; i < subs; i++ {
+				ch, unsub := h.Subscribe(64)
+				drain = append(drain, unsub)
+				go func() {
+					for range ch {
+					}
+				}()
+			}
+			u := Update{
+				Type: "analysis", DeploymentID: 1, CameraID: 1, CameraName: "cam",
+				Result: "near", Rule: "grab_near_edge", Level: "warning",
+				Reason: "接近边界", TS: time.Now(),
+				Overlay: map[string]any{"ref_width": 1280.0, "ref_height": 720.0, "adapter": "onnx"},
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				h.Publish(u)
+			}
+			b.StopTimer()
+			for _, f := range drain {
+				f()
+			}
+		})
 	}
 }

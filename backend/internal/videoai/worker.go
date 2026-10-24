@@ -1,7 +1,6 @@
 package videoai
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -72,11 +71,11 @@ type pipeRW struct {
 
 // workerSession is one long-lived worker process bound to a model config.
 type workerSession struct {
-	cfg   ModelConfig
-	cmd   *exec.Cmd
-	rw    io.ReadWriteCloser
-	mu    sync.Mutex
-	dead  bool
+	cfg  ModelConfig
+	cmd  *exec.Cmd
+	rw   io.ReadWriteCloser
+	mu   sync.Mutex
+	dead bool
 }
 
 // newWorkerSession spawns the worker and performs the init handshake.
@@ -137,16 +136,17 @@ func (s *workerSession) handshake() error {
 }
 
 // run sends one tensor and decodes the output tensors.
+//
+// The returned tensors borrow pooled buffers: the caller must call
+// releaseTensors once it is done reading them (postprocess only reads).
 func (s *workerSession) run(tensor []float32, cfg ModelConfig) ([]rawTensor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.dead {
 		return nil, fmt.Errorf("推理 worker 已退出")
 	}
-	payload := make([]byte, len(tensor)*4)
-	for i, v := range tensor {
-		binary.LittleEndian.PutUint32(payload[i*4:], math.Float32bits(v))
-	}
+	payload := encodeFloats(tensor)
+	defer putBytes(payload)
 	hdr := map[string]any{
 		"op": "infer", "n": len(payload),
 		"name": "images", "shape": []int{1, 3, cfg.InputH, cfg.InputW},
@@ -179,6 +179,81 @@ func (s *workerSession) run(tensor []float32, cfg ModelConfig) ([]rawTensor, err
 	}
 }
 
+// ------------------------------------------------------ wire buffers ----
+//
+// One inference moves a 3x640x640 float32 tensor in (~4.9 MB) and a
+// [1,84,8400] output out (~2.8 MB). Encoding those on the heap per frame makes
+// the allocator, not the model, the limit on how many cameras a host can run,
+// so both sides draw from pools. Buffers are only ever live between run() and
+// postprocess, both synchronous, so reuse cannot race.
+
+var bytePool = sync.Pool{New: func() any { return new([]byte) }}
+
+func getBytes(n int) []byte {
+	p := bytePool.Get().(*[]byte)
+	if cap(*p) < n {
+		*p = make([]byte, n)
+	}
+	return (*p)[:n]
+}
+
+func putBytes(b []byte) {
+	if cap(b) == 0 {
+		return
+	}
+	bytePool.Put(&b)
+}
+
+// encodeFloats serialises the tensor as little-endian float32, the layout the
+// worker's numpy.frombuffer expects.
+func encodeFloats(t []float32) []byte {
+	out := getBytes(len(t) * 4)
+	for i, v := range t {
+		binary.LittleEndian.PutUint32(out[i*4:], math.Float32bits(v))
+	}
+	return out
+}
+
+// releaseTensors returns the data buffers of a run() result. Call it once
+// postprocess has read them; nothing may retain rawTensor.Data afterwards.
+func releaseTensors(outs []rawTensor) {
+	for i := range outs {
+		putFloats(outs[i].Data)
+		outs[i].Data = nil
+	}
+}
+
+// decodeFloats turns a wire payload into a pooled float32 slice and hands the
+// byte buffer back.
+func decodeFloats(payload []byte) []float32 {
+	if len(payload) == 0 {
+		return nil
+	}
+	out := getFloats(len(payload) / 4)
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(payload[i*4:]))
+	}
+	putBytes(payload)
+	return out
+}
+
+var floatPool = sync.Pool{New: func() any { return new([]float32) }}
+
+func getFloats(n int) []float32 {
+	p := floatPool.Get().(*[]float32)
+	if cap(*p) < n {
+		*p = make([]float32, n)
+	}
+	return (*p)[:n]
+}
+
+func putFloats(f []float32) {
+	if cap(f) == 0 {
+		return
+	}
+	floatPool.Put(&f)
+}
+
 // readInferReply reads the infer reply header plus one framed payload per
 // declared output tensor.
 func readInferReply(r io.Reader) ([]rawTensor, error) {
@@ -205,10 +280,7 @@ func readInferReply(r io.Reader) ([]rawTensor, error) {
 		if len(payload)%4 != 0 {
 			return nil, fmt.Errorf("输出张量 %s 长度不是 4 的倍数", name)
 		}
-		data := make([]float32, len(payload)/4)
-		for i := range data {
-			data[i] = math.Float32frombits(binary.LittleEndian.Uint32(payload[i*4:]))
-		}
+		data := decodeFloats(payload)
 		outs = append(outs, rawTensor{Name: name, Shape: shape, Data: data})
 	}
 	return outs, nil
@@ -293,13 +365,20 @@ func writeFrame(w io.Writer, header any, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	_ = binary.Write(&buf, binary.BigEndian, uint32(len(hb)))
-	buf.Write(hb)
-	if payload != nil {
-		buf.Write(payload)
+	// Header and payload are written separately so a multi-megabyte tensor is
+	// never copied into an intermediate buffer first. The stream is guarded by
+	// the session mutex, so splitting the write cannot interleave.
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(hb)))
+	if _, err := w.Write(lenBuf[:]); err != nil {
+		return err
 	}
-	_, err = w.Write(buf.Bytes())
+	if _, err := w.Write(hb); err != nil {
+		return err
+	}
+	if len(payload) > 0 {
+		_, err = w.Write(payload)
+	}
 	return err
 }
 

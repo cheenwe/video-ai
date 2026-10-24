@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"time"
 
 	"baseplatform/internal/models"
@@ -18,12 +19,32 @@ func (h *ReportHandler) Summary(c *gin.Context) {
 	days := 7
 	from := time.Now().AddDate(0, 0, -days)
 
-	var total, confirmed, falsePos, pending, activeScene int64
-	h.DB.Model(&models.VideoEvent{}).Where("started_at >= ?", from).Count(&total)
-	h.DB.Model(&models.VideoEvent{}).Where("started_at >= ? AND handle_status = ?", from, "confirmed").Count(&confirmed)
-	h.DB.Model(&models.VideoEvent{}).Where("started_at >= ? AND conclusion = ?", from, "false_positive").Count(&falsePos)
-	h.DB.Model(&models.VideoEvent{}).Where("handle_status = ?", "pending").Count(&pending)
-	h.DB.Model(&models.VideoEvent{}).Where("scene_status = ?", "active").Count(&activeScene)
+	// One pass over the events table instead of five COUNTs that each scan it.
+	// pending and active_scene are deliberately NOT date-filtered (they are
+	// "open right now"), so the WHERE is their union and each counter carries
+	// its own guard — the totals are identical to the five separate queries.
+	type eventCounts struct {
+		Total       int64
+		Confirmed   int64
+		FalsePos    int64
+		Pending     int64
+		ActiveScene int64
+	}
+	var ec eventCounts
+	h.DB.Model(&models.VideoEvent{}).
+		Select(`coalesce(sum(case when started_at >= @from then 1 else 0 end),0) as total,
+			coalesce(sum(case when started_at >= @from and handle_status = @confirmed then 1 else 0 end),0) as confirmed,
+			coalesce(sum(case when started_at >= @from and conclusion = @false_positive then 1 else 0 end),0) as false_pos,
+			coalesce(sum(case when handle_status = @pending then 1 else 0 end),0) as pending,
+			coalesce(sum(case when scene_status = @active then 1 else 0 end),0) as active_scene`,
+			sql.Named("from", from),
+			sql.Named("confirmed", "confirmed"),
+			sql.Named("false_positive", "false_positive"),
+			sql.Named("pending", "pending"),
+			sql.Named("active", "active")).
+		Where("started_at >= ? OR handle_status = ? OR scene_status = ?", from, "pending", "active").
+		Scan(&ec)
+	total, confirmed, falsePos, pending, activeScene := ec.Total, ec.Confirmed, ec.FalsePos, ec.Pending, ec.ActiveScene
 
 	type camRow struct {
 		CameraID uint

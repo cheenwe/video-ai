@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 )
 
 // rawTensor is one worker output tensor: name, shape and float32 payload.
@@ -53,9 +54,17 @@ func postprocess(outs []rawTensor, cfg ModelConfig, lb letterbox, origW, origH i
 	if conf <= 0 {
 		conf = 0.25
 	}
-	var boxes []box
+	// One scratch row for every anchor: a YOLOv8 export carries 8400 anchors,
+	// so allocating the score vector per anchor used to be 8400 allocations
+	// per frame per camera.
+	scores := getScores(nc)
+	defer putScores(scores)
+	// Only a handful of anchors clear the confidence gate, so start small and
+	// let the slice grow instead of reserving all n.
+	boxes := make([]box, 0, 64)
+	ow, oh := float64(origW), float64(origH)
 	for i := 0; i < n; i++ {
-		cx, cy, bw, bh, scores := anchorAt(det.Data, i, n, cols, nc, channelFirst)
+		cx, cy, bw, bh := anchorAt(det.Data, i, n, cols, nc, channelFirst, scores)
 		if bw <= 0 || bh <= 0 {
 			continue
 		}
@@ -65,24 +74,24 @@ func postprocess(outs []rawTensor, cfg ModelConfig, lb letterbox, origW, origH i
 				best, bestScore = c, scores[c]
 			}
 		}
-		if float64(bestScore) < conf {
+		if bestScore < conf {
 			continue
 		}
 		// Letterboxed pixels -> source pixels.
 		x1, y1 := lb.toSource(cx-bw/2, cy-bh/2)
 		x2, y2 := lb.toSource(cx+bw/2, cy+bh/2)
-		if origW > 0 {
-			x1 = clamp(x1, 0, float64(origW))
-			x2 = clamp(x2, 0, float64(origW))
+		if ow > 0 {
+			x1 = clamp(x1, 0, ow)
+			x2 = clamp(x2, 0, ow)
 		}
-		if origH > 0 {
-			y1 = clamp(y1, 0, float64(origH))
-			y2 = clamp(y2, 0, float64(origH))
+		if oh > 0 {
+			y1 = clamp(y1, 0, oh)
+			y2 = clamp(y2, 0, oh)
 		}
 		if x2 <= x1 || y2 <= y1 {
 			continue
 		}
-		boxes = append(boxes, box{x1: x1, y1: y1, x2: x2, y2: y2, score: float64(bestScore), class: best})
+		boxes = append(boxes, box{x1: x1, y1: y1, x2: x2, y2: y2, score: bestScore, class: best})
 	}
 	boxes = nms(boxes, cfg.IoU)
 
@@ -125,9 +134,34 @@ func pickDetectOutput(outs []rawTensor, classes int) rawTensor {
 	return outs[0]
 }
 
-// anchorAt reads one anchor from the flat output payload.
-func anchorAt(data []float32, i, n, cols, nc int, channelFirst bool) (cx, cy, bw, bh float64, scores []float64) {
-	scores = make([]float64, nc)
+// scoreScratch recycles the per-anchor score vector. nc is tiny (one entry per
+// class) and the buffer is returned to a pool, so the hot loop stays
+// allocation-free regardless of how many anchors the model emits.
+var scorePool = sync.Pool{New: func() any {
+	s := make([]float64, 0, 16)
+	return &s
+}}
+
+func getScores(nc int) []float64 {
+	p := scorePool.Get().(*[]float64)
+	s := (*p)[:nc]
+	if cap(s) < nc {
+		s = make([]float64, nc)
+		*p = s[:cap(s)]
+	}
+	return s
+}
+
+func putScores(s []float64) {
+	if cap(s) == 0 {
+		return
+	}
+	scorePool.Put(&s)
+}
+
+// anchorAt reads one anchor from the flat output payload into scores, which
+// must have room for nc entries.
+func anchorAt(data []float32, i, n, cols, nc int, channelFirst bool, scores []float64) (cx, cy, bw, bh float64) {
 	if channelFirst {
 		cx = float64(data[i])
 		cy = float64(data[n+i])

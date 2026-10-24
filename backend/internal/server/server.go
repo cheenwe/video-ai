@@ -116,10 +116,10 @@ func NewApplication(cfg *config.Config, db *gorm.DB, frontend string) (*Applicat
 	project := &handlers.ProjectHandler{DB: db, RBAC: rbacSvc}
 	nvrH := &handlers.NVRHandler{DB: db, Cfg: cfg, RBAC: rbacSvc}
 	videoRuntime := videoai.NewManager(db, cfg.DataHome, eventBus)
-	camH := &handlers.CameraHandler{DB: db, RBAC: rbacSvc, ProbeAgent: nvrH.ProbeAgentCamera, Ingest: videoRuntime.Ingest}
-	boundH := &handlers.BoundaryHandler{DB: db}
+	camH := &handlers.CameraHandler{DB: db, RBAC: rbacSvc, ProbeAgent: nvrH.ProbeAgentCamera, Ingest: videoRuntime.Ingest, Runtime: videoRuntime}
+	boundH := &handlers.BoundaryHandler{DB: db, Runtime: videoRuntime}
 	deployH := &handlers.DeploymentHandler{DB: db, Runtime: videoRuntime, RBAC: rbacSvc}
-	algoH := &handlers.AlgorithmHandler{DB: db}
+	algoH := &handlers.AlgorithmHandler{DB: db, Runtime: videoRuntime}
 	eventH := &handlers.EventHandler{DB: db, RBAC: rbacSvc}
 	reportH := &handlers.ReportHandler{DB: db}
 	accessH := &handlers.AccessHandler{DB: db}

@@ -25,6 +25,24 @@ import (
 
 type AlgorithmHandler struct {
 	DB *gorm.DB
+	// Runtime is optional; when set, publishing or rebinding a model version
+	// invalidates the cached resolution so analysis switches immediately
+	// instead of waiting for the cache TTL to expire.
+	Runtime *videoai.Manager
+}
+
+// invalidateModelFor drops every cached resolution that points at a model
+// version.
+func (h *AlgorithmHandler) invalidateModelFor(versionID uint) {
+	if h.Runtime == nil {
+		return
+	}
+	var ids []uint
+	h.DB.Model(&models.BusinessTemplate{}).Where("model_version_id = ?", versionID).
+		Pluck("id", &ids)
+	for _, id := range ids {
+		h.Runtime.InvalidateModel(id)
+	}
 }
 
 func (h *AlgorithmHandler) ListModels(c *gin.Context) {
@@ -109,6 +127,9 @@ func (h *AlgorithmHandler) UpdateTemplate(c *gin.Context) {
 	}
 	if req.ModelVersionID != nil {
 		upd["model_version_id"] = *req.ModelVersionID
+		if h.Runtime != nil {
+			h.Runtime.InvalidateModel(uint(id))
+		}
 	}
 	if len(upd) == 0 && len(req.RuleCodes) == 0 {
 		response.BizFail(c, "没有需要更新的字段", 422)
@@ -190,6 +211,7 @@ func (h *AlgorithmHandler) PublishModelVersion(c *gin.Context) {
 	}
 	now := time.Now()
 	_ = h.DB.Model(&mv).Updates(map[string]any{"status": "published", "published_at": now}).Error
+	h.invalidateModelFor(mv.ID)
 	u := middleware.CurrentUser(c)
 	services.LogAction(h.DB, c, "audit", "success", "algorithm.version.publish", &u, mv.Version)
 	_ = h.DB.First(&mv, id)

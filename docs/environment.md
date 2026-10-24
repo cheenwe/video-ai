@@ -59,12 +59,15 @@
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `BASE_VIDEO_AI_MAX_PREVIEW` | `32` | MJPEG 并发预览上限（每路直连 RTSP 预览对应一个 ffmpeg 解码进程）；超限返回 503 并在面板提示，按机器负载调整 |
+| `BASE_VIDEO_AI_MAX_PREVIEW` | `32` | MJPEG 并发预览上限；超限返回 503 并在面板提示，按机器负载调整 |
 | `BASE_VIDEO_AI_ONNX_WORKER` | 内建 worker | ONNX 推理 worker 命令（默认 `python3 backend/workers/onnx/worker.py`）；指向自定义命令可实现同一协议的其他 worker |
+| `BASE_VIDEO_AI_ONNX_WORKERS` | `min(GOMAXPROCS, 8)` | 每个模型的 worker 进程数。一个 worker 一次只处理一次推理，多路摄像头共用同一模型时会排队；调大可并行（每个进程自带一份 ORT 会话与内存） |
+| `BASE_VIDEO_AI_RESIZE` | `approx` | 帧缩放插值：`approx`（默认，快约 3 倍，与双线性平均差 0.68/255）或 `bilinear`（精确 tent 核，慢且每帧多约 16 MB 分配） |
 
 说明：
 
 - 视频 AI 分析**只走真实链路**：无新鲜帧时布控报 `offline`（`waiting_video`），不存在开关可以回落到演示推理（旧版 `BASE_VIDEO_AI_REQUIRE_FRAMES` 已随 mock 移除而取消，设置它无效果）。
+- MJPEG 预览**复用共享的取流解码器**（同一摄像头多路面板只解码一次），上限保护的是并发连接数而不是解码进程数。
 - 推理 worker 依赖 Python + onnxruntime（`pip install -r backend/workers/onnx/requirements.txt`）；`GET /api/video/self-check` 的 `onnx_worker` 项会如实报告其状态。
 - 联调行为见 [视频 AI](video-ai.md)。
 

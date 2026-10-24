@@ -35,7 +35,7 @@ type Manager struct {
 	// Ingest; tests replace it to inject deterministic frames.
 	frames frameSource
 	// Hub broadcasts analysis updates to live subscribers. Nil disables push.
-	Hub *Hub
+	Hub    *Hub
 	logger *log.Logger
 	parser cron.Parser
 
@@ -43,6 +43,25 @@ type Manager struct {
 	cancels map[uint]context.CancelFunc
 	hys     map[uint]*hysteresis
 	wg      sync.WaitGroup
+
+	// Per-tick lookups that only change on operator edits. See tickCache.
+	cacheStream *tickCache // cameraID -> stream URL
+	cacheModel  *tickCache // templateID -> *resolvedModel
+	cacheGeom   *tickCache // boundaryVersionID -> *models.BoundaryVersion
+
+	// openOutages tracks cameras with an unclosed media outage so a healthy
+	// tick does not query the outage table at all.
+	outageMu    sync.Mutex
+	openOutages map[uint]bool
+
+	// lastOverlay remembers what was persisted for each deployment so the
+	// overlay is only rewritten when it actually changes.
+	overlayMu   sync.Mutex
+	lastOverlay map[uint]string
+	// camStatus remembers the last persisted camera status.
+	camStatus map[uint]string
+	// appliedRev remembers the last persisted applied revision.
+	appliedRev map[uint]int
 }
 
 // frameSource is the ingest surface the analysis loop needs.
@@ -64,6 +83,16 @@ func NewManager(db *gorm.DB, dataHome string, bus *services.EventBus) *Manager {
 		parser:   cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor),
 		cancels:  map[uint]context.CancelFunc{},
 		hys:      map[uint]*hysteresis{},
+		// Stream URLs and published geometry move on operator edits (minutes
+		// to days), while a model can be re-published mid-shift: a short TTL
+		// bounds staleness even if a handler forgets to invalidate.
+		cacheStream: newTickCache(30 * time.Second),
+		cacheModel:  newTickCache(5 * time.Second),
+		cacheGeom:   newTickCache(30 * time.Second),
+		openOutages: map[uint]bool{},
+		lastOverlay: map[uint]string{},
+		camStatus:   map[uint]string{},
+		appliedRev:  map[uint]int{},
 	}
 }
 
@@ -71,20 +100,39 @@ func NewManager(db *gorm.DB, dataHome string, bus *services.EventBus) *Manager {
 const freshFrameWindow = 5 * time.Second
 
 // cameraStreamURL returns the camera's main (or first) configured stream URL.
+// The result is cached briefly: the URL only changes when an operator edits the
+// camera, and this runs once per tick per camera.
 func (m *Manager) cameraStreamURL(cameraID uint) string {
+	if c := m.cacheStream; c != nil {
+		if v, ok := c.get(cacheKeyStream(cameraID)); ok {
+			if u, _ := v.(string); u != "" {
+				return u
+			}
+		}
+	}
 	var streams []models.StreamProfile
 	m.DB.Where("camera_id = ? AND enabled = 1", cameraID).Order("id asc").Find(&streams)
+	url := ""
 	for _, s := range streams {
 		if s.Role == "main" && s.URL != "" {
-			return s.URL
+			url = s.URL
+			break
 		}
 	}
-	for _, s := range streams {
-		if s.URL != "" {
-			return s.URL
+	if url == "" {
+		for _, s := range streams {
+			if s.URL != "" {
+				url = s.URL
+				break
+			}
 		}
 	}
-	return ""
+	// Only cache a usable URL: caching "" would keep a freshly configured
+	// stream invisible for the whole TTL.
+	if url != "" && m.cacheStream != nil {
+		m.cacheStream.set(cacheKeyStream(cameraID), url)
+	}
+	return url
 }
 
 // frameFor returns the freshest decoded frame for a camera, if ingest is
@@ -107,6 +155,26 @@ func (m *Manager) frameFor(cam models.Camera) (ingest.Frame, bool) {
 	return f, true
 }
 
+// boundaryFor loads a boundary version, caching it briefly. Published boundary
+// versions are immutable, and the geometry JSON is parsed on every tick, so
+// this removes one query plus one JSON parse per tick.
+func (m *Manager) boundaryFor(id uint) (models.BoundaryVersion, error) {
+	if c := m.cacheGeom; c != nil {
+		if v, ok := c.get(cacheKeyGeom(id)); ok {
+			if b, _ := v.(*models.BoundaryVersion); b != nil {
+				return *b, nil
+			}
+		}
+	}
+	var bound models.BoundaryVersion
+	err := m.DB.First(&bound, id).Error
+	if err == nil && m.cacheGeom != nil {
+		cp := bound
+		m.cacheGeom.set(cacheKeyGeom(id), &cp)
+	}
+	return bound, err
+}
+
 // resolvedModel is the model version selected for a deployment, via its
 // business template's ModelVersionID, together with the inference config.
 type resolvedModel struct {
@@ -122,6 +190,15 @@ type resolvedModel struct {
 func (m *Manager) resolveModel(d models.Deployment) (*resolvedModel, error) {
 	if d.TemplateID == nil {
 		return nil, fmt.Errorf("布控未绑定业务模板")
+	}
+	// Only successful resolutions are cached: a transient failure (model file
+	// moved, worker down) must be retried on the next tick, not remembered.
+	if c := m.cacheModel; c != nil {
+		if v, ok := c.get(cacheKeyModel(*d.TemplateID)); ok {
+			if rm, _ := v.(*resolvedModel); rm != nil {
+				return rm, nil
+			}
+		}
 	}
 	var tpl models.BusinessTemplate
 	if err := m.DB.First(&tpl, *d.TemplateID).Error; err != nil {
@@ -147,6 +224,9 @@ func (m *Manager) resolveModel(d models.Deployment) (*resolvedModel, error) {
 		return nil, err
 	} else {
 		rm.Demo = impl.Demo()
+	}
+	if c := m.cacheModel; c != nil {
+		c.set(cacheKeyModel(*d.TemplateID), rm)
 	}
 	return rm, nil
 }
@@ -373,7 +453,7 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	if !valid {
 		// Invalid schedule_cron is a configuration fault: never analyse and
 		// never silently fall back to always-on (self-check flags it too).
-		m.bumpRuntime(d, ResultUnknown, 0, "schedule_cron 无效："+strings.TrimSpace(d.ScheduleCron), now, nil, -1)
+		m.bumpRuntime(d, ResultUnknown, 0, "schedule_cron 无效："+strings.TrimSpace(d.ScheduleCron), now, nil, -1, nil)
 		return nil
 	}
 	if !inWindow {
@@ -381,7 +461,7 @@ func (m *Manager) tick(id uint, now time.Time) error {
 			_ = m.DB.Model(&d).Update("status", "out_of_schedule").Error
 			d.Status = "out_of_schedule"
 		}
-		m.bumpRuntime(d, ResultUnknown, 0, "计划外时段，不分析", now, nil, -1)
+		m.bumpRuntime(d, ResultUnknown, 0, "计划外时段，不分析", now, nil, -1, nil)
 		return nil
 	}
 	if d.Status == "out_of_schedule" {
@@ -394,7 +474,7 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	}
 	if cam.Enabled == 0 || cam.Archived == 1 {
 		m.noteMediaDown(cam, "摄像头已停用或已归档", now)
-		m.bumpRuntime(d, ResultOffline, 0, "摄像头已停用", now, nil, -1)
+		m.bumpRuntime(d, ResultOffline, 0, "摄像头已停用", now, nil, -1, nil)
 		return nil
 	}
 
@@ -404,7 +484,7 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	frame, hasFrame := m.frameFor(cam)
 	if !hasFrame {
 		m.noteMediaDown(cam, "无可用视频帧（未配置码流或取流未连通）", now)
-		m.bumpRuntime(d, ResultOffline, 0, "等待视频帧", now, nil, -1)
+		m.bumpRuntime(d, ResultOffline, 0, "等待视频帧", now, nil, -1, nil)
 		_ = m.DB.Model(&cam).Update("analysis_status", "waiting_video").Error
 		return nil
 	}
@@ -416,32 +496,36 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	mediaOK := true
 	geom := Geometry{}
 	if d.BoundaryVersionID != nil {
-		if err := m.DB.First(&bound, *d.BoundaryVersionID).Error; err != nil || bound.Status != "published" {
+		loaded, err := m.boundaryFor(*d.BoundaryVersionID)
+		if err == nil {
+			bound = loaded
+		}
+		if err != nil || bound.Status != "published" {
 			mediaOK = false
-			m.bumpRuntime(d, ResultUnknown, 0, "边界未发布或无效", now, nil, frameAgeMS)
-			_ = m.DB.Model(&cam).Update("analysis_status", "fault").Error
+			m.bumpRuntime(d, ResultUnknown, 0, "边界未发布或无效", now, nil, frameAgeMS, nil)
+			_ = m.setCameraStatus(cam, "fault")
 			return nil
 		}
-		g, err := ParseGeometry(bound.GeometryJSON)
-		if err != nil {
-			m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, nil, frameAgeMS)
+		g, gerr := ParseGeometry(bound.GeometryJSON)
+		if gerr != nil {
+			m.bumpRuntime(d, ResultUnknown, 0, gerr.Error(), now, nil, frameAgeMS, nil)
 			return nil
 		}
 		geom = g
 	} else {
-		m.bumpRuntime(d, ResultUnknown, 0, "未绑定边界版本", now, nil, frameAgeMS)
+		m.bumpRuntime(d, ResultUnknown, 0, "未绑定边界版本", now, nil, frameAgeMS, nil)
 		return nil
 	}
 
 	rm, err := m.resolveModel(d)
 	if err != nil {
-		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, nil, frameAgeMS)
+		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, nil, frameAgeMS, nil)
 		_ = m.DB.Model(&cam).Update("analysis_status", "fault").Error
 		return nil
 	}
 	impl, err := AdapterByName(rm.Adapter)
 	if err != nil {
-		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, nil, frameAgeMS)
+		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, nil, frameAgeMS, nil)
 		return nil
 	}
 
@@ -454,7 +538,7 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	}
 	dets, err := impl.Infer(cam.ID, Frame{TS: now, JPEG: frame.JPEG, W: frame.W, H: frame.H}, rm.Config)
 	if err != nil {
-		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, rm, frameAgeMS)
+		m.bumpRuntime(d, ResultUnknown, 0, err.Error(), now, rm, frameAgeMS, nil)
 		_ = m.DB.Model(&cam).Update("analysis_status", "fault").Error
 		return nil
 	}
@@ -490,17 +574,19 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	// restart, while active events persist and merge by event_key.
 	hys := m.hysteresisFor(id, d)
 	dec := hys.Update(out.Result, out.RuleCode, now)
-	// Keep the geometry of this tick so the live view can draw it.
-	_ = m.DB.Model(&models.RuntimeStatus{}).Where("deployment_id = ?", d.ID).
-		Update("last_overlay_json", mustJSON(out.Overlay)).Error
-	m.publishUpdate(d, cam, out, dec, now)
-	m.bumpRuntime(d, out.Result, out.Distance, out.Reason, now, rm, frameAgeMS)
-	_ = m.DB.Model(&cam).Updates(map[string]any{
-		"analysis_status": "running",
-		"media_status":    "online",
-		"device_status":   "online",
-	}).Error
-	_ = m.DB.Model(&d).Update("applied_revision", d.DesiredRevision).Error
+	// Keep the geometry of this tick so the live view can draw it. Volatile
+	// values (frame age) are pushed over the websocket instead of being
+	// persisted, so the row is only rewritten when the stable part changes.
+	m.persistOverlay(d.ID, out.Overlay)
+	// One broadcast per tick: the analysis update already carries the result,
+	// so bumpRuntime pushes it instead of emitting a second status frame.
+	full := buildUpdate(d, cam, out, dec, now)
+	m.bumpRuntime(d, out.Result, out.Distance, out.Reason, now, rm, frameAgeMS, &full)
+	_ = m.setCameraStatus(cam, "running")
+	if d.AppliedRevision != d.DesiredRevision {
+		_ = m.DB.Model(&d).Update("applied_revision", d.DesiredRevision).Error
+		m.noteAppliedRev(d.ID, d.DesiredRevision)
+	}
 
 	if dec.Escalated {
 		_ = m.recoverActiveEventsFor(d.ID, dec.Rule, now)
@@ -514,17 +600,76 @@ func (m *Manager) tick(id uint, now time.Time) error {
 	return nil
 }
 
-// publishUpdate broadcasts the tick so live viewers can draw it immediately.
-func (m *Manager) publishUpdate(d models.Deployment, cam models.Camera, out RuleOutput, dec hysteresisDecision, now time.Time) {
-	if m.Hub == nil {
+// volatileOverlayKeys are recomputed every tick and pushed to live viewers
+// over the websocket; writing them to the database would defeat the change
+// check in persistOverlay.
+var volatileOverlayKeys = map[string]bool{"frame_age_ms": true}
+
+// persistOverlay stores the stable part of the overlay, skipping the write when
+// it is unchanged. The overlay carries the boundary geometry, which only
+// changes when an operator publishes a new boundary — once per tick per
+// deployment was pure write amplification.
+func (m *Manager) persistOverlay(deploymentID uint, overlay map[string]any) {
+	if len(overlay) == 0 {
 		return
 	}
+	stable := make(map[string]any, len(overlay))
+	for k, v := range overlay {
+		if !volatileOverlayKeys[k] {
+			stable[k] = v
+		}
+	}
+	payload := mustJSON(stable)
+	m.overlayMu.Lock()
+	prev, seen := m.lastOverlay[deploymentID]
+	same := seen && prev == payload
+	if !same {
+		m.lastOverlay[deploymentID] = payload
+	}
+	m.overlayMu.Unlock()
+	if same {
+		return
+	}
+	_ = m.DB.Model(&models.RuntimeStatus{}).Where("deployment_id = ?", deploymentID).
+		Update("last_overlay_json", payload).Error
+}
+
+func (m *Manager) noteAppliedRev(deploymentID uint, rev int) {
+	m.overlayMu.Lock()
+	m.appliedRev[deploymentID] = rev
+	m.overlayMu.Unlock()
+}
+
+// setCameraStatus writes the camera status only when it changed. A healthy
+// camera runs this on every tick, which used to mean one UPDATE per tick per
+// camera rewriting three unchanged columns.
+func (m *Manager) setCameraStatus(cam models.Camera, status string) error {
+	m.overlayMu.Lock()
+	prev, seen := m.camStatus[cam.ID]
+	same := seen && prev == status && cam.MediaStatus == "online" && cam.DeviceStatus == "online"
+	if !same {
+		m.camStatus[cam.ID] = status
+	}
+	m.overlayMu.Unlock()
+	if same {
+		return nil
+	}
+	return m.DB.Model(&cam).Updates(map[string]any{
+		"analysis_status": status,
+		"media_status":    "online",
+		"device_status":   "online",
+	}).Error
+}
+
+// buildUpdate assembles the tick's websocket frame so live viewers can draw it
+// immediately. It is handed to bumpRuntime, which publishes it once.
+func buildUpdate(d models.Deployment, cam models.Camera, out RuleOutput, dec hysteresisDecision, now time.Time) Update {
 	result := out.Result
 	rule := out.RuleCode
 	if rule == "" {
 		rule = dec.Rule
 	}
-	m.Hub.Publish(Update{
+	return Update{
 		Type:         "analysis",
 		DeploymentID: d.ID,
 		CameraID:     cam.ID,
@@ -536,7 +681,7 @@ func (m *Manager) publishUpdate(d models.Deployment, cam models.Camera, out Rule
 		Reason:       out.Reason,
 		Overlay:      out.Overlay,
 		TS:           now,
-	})
+	}
 }
 
 // hysteresisFor returns the per-deployment hysteresis state, creating it on
@@ -595,18 +740,42 @@ func (m *Manager) recordStat(d models.Deployment, result string, now time.Time) 
 
 // noteMediaDown opens a media outage for the camera when none is open, so
 // offline duration can be summed later instead of guessed.
+func (m *Manager) hasOpenOutage(cameraID uint) bool {
+	m.outageMu.Lock()
+	defer m.outageMu.Unlock()
+	return m.openOutages[cameraID]
+}
+
+// noteMediaDown opens a media outage for the camera when none is open, so
+// offline duration can be summed later instead of guessed. The open set is
+// tracked in memory so a camera that stays offline does not query the outage
+// table on every tick.
 func (m *Manager) noteMediaDown(cam models.Camera, reason string, now time.Time) {
-	var open models.MediaOutage
-	err := m.DB.Where("camera_id = ? AND ended_at IS NULL", cam.ID).Order("id desc").First(&open).Error
-	if err == nil {
-		if open.Reason != reason {
-			_ = m.DB.Model(&open).Update("reason", reason).Error
+	m.outageMu.Lock()
+	known, open := m.openOutages[cam.ID]
+	m.outageMu.Unlock()
+	if open {
+		return
+	}
+	if !known {
+		// First offline tick for this camera in this process: an outage left
+		// open by a previous run must be reused, not duplicated, or reported
+		// offline time would be double counted after every restart.
+		var existing models.MediaOutage
+		if err := m.DB.Where("camera_id = ? AND ended_at IS NULL", cam.ID).
+			Order("id desc").First(&existing).Error; err == nil {
+			m.outageMu.Lock()
+			m.openOutages[cam.ID] = true
+			m.outageMu.Unlock()
+			if existing.Reason != reason {
+				_ = m.DB.Model(&existing).Update("reason", reason).Error
+			}
+			return
 		}
-		return
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return
-	}
+	m.outageMu.Lock()
+	m.openOutages[cam.ID] = true
+	m.outageMu.Unlock()
 	_ = m.DB.Create(&models.MediaOutage{
 		CameraID:  cam.ID,
 		ProjectID: cam.ProjectID,
@@ -617,6 +786,14 @@ func (m *Manager) noteMediaDown(cam models.Camera, reason string, now time.Time)
 
 // noteMediaOK closes the camera's open outage, recording its real duration.
 func (m *Manager) noteMediaOK(cam models.Camera, now time.Time) {
+	m.outageMu.Lock()
+	if !m.openOutages[cam.ID] {
+		m.outageMu.Unlock()
+		return
+	}
+	delete(m.openOutages, cam.ID)
+	m.outageMu.Unlock()
+
 	var open models.MediaOutage
 	if err := m.DB.Where("camera_id = ? AND ended_at IS NULL", cam.ID).Order("id desc").First(&open).Error; err != nil {
 		return
@@ -629,7 +806,11 @@ func (m *Manager) noteMediaOK(cam models.Camera, now time.Time) {
 	}).Error
 }
 
-func (m *Manager) bumpRuntime(d models.Deployment, result string, dist float64, reason string, now time.Time, rm *resolvedModel, frameAgeMS int64) {
+// bumpRuntime writes the runtime row and broadcasts the outcome. push carries
+// the full analysis frame when the tick reached inference; other paths pass
+// nil and get a status-only frame, so live viewers still see offline / fault /
+// out-of-schedule transitions.
+func (m *Manager) bumpRuntime(d models.Deployment, result string, dist float64, reason string, now time.Time, rm *resolvedModel, frameAgeMS int64, push *Update) {
 	m.recordStat(d, result, now)
 	hb := now
 	backend := ""
@@ -658,14 +839,18 @@ func (m *Manager) bumpRuntime(d models.Deployment, result string, dist float64, 
 	// never run inference (offline / waiting_video / out_of_schedule / fault).
 	// The overlay of the previous tick is preserved so panels keep drawing it.
 	if m.Hub != nil {
-		m.Hub.PublishStatus(Update{
-			Type:         "analysis",
-			DeploymentID: d.ID,
-			CameraID:     d.CameraID,
-			Result:       result,
-			Reason:       reason,
-			TS:           now,
-		})
+		if push != nil {
+			m.Hub.Publish(*push)
+		} else {
+			m.Hub.PublishStatus(Update{
+				Type:         "analysis",
+				DeploymentID: d.ID,
+				CameraID:     d.CameraID,
+				Result:       result,
+				Reason:       reason,
+				TS:           now,
+			})
+		}
 	}
 	_ = dist
 }

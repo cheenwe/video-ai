@@ -10,6 +10,7 @@ import (
 	"baseplatform/internal/models"
 	"baseplatform/internal/response"
 	"baseplatform/internal/services"
+	"baseplatform/internal/videoai"
 	"baseplatform/internal/videoai/ingest"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,9 @@ type CameraHandler struct {
 	ProbeAgent probeAgentCam
 	// Ingest pulls real frames; nil means no direct preview is possible.
 	Ingest *ingest.Manager
+	// Runtime is optional; when set, editing a stream invalidates the URL the
+	// analysis loop cached for this camera.
+	Runtime *videoai.Manager
 }
 
 func cameraOut(c models.Camera, streams []models.StreamProfile) gin.H {
@@ -157,13 +161,40 @@ func (h *CameraHandler) List(c *gin.Context) {
 	q.Count(&total)
 	var items []models.Camera
 	q.Order("id desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items)
+	// One IN query for every camera's streams instead of one query per camera:
+	// a 50-camera page used to issue 51 statements.
+	streams := streamsByCamera(h.DB, cameraIDs(items))
 	out := make([]gin.H, 0, len(items))
 	for _, cam := range items {
-		var streams []models.StreamProfile
-		h.DB.Where("camera_id = ?", cam.ID).Find(&streams)
-		out = append(out, cameraOut(cam, streams))
+		out = append(out, cameraOut(cam, streams[cam.ID]))
 	}
 	response.OK(c, services.PaginateResult(out, total, page, pageSize), "")
+}
+
+// cameraIDs collects the primary keys of a page of cameras.
+func cameraIDs(items []models.Camera) []uint {
+	ids := make([]uint, 0, len(items))
+	for _, c := range items {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// streamsByCamera loads the stream profiles of many cameras in one query,
+// grouped by camera and ordered so main comes before sub.
+func streamsByCamera(db *gorm.DB, ids []uint) map[uint][]models.StreamProfile {
+	out := make(map[uint][]models.StreamProfile, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	var rows []models.StreamProfile
+	db.Where("camera_id IN ?", ids).
+		Order("camera_id asc, CASE role WHEN 'main' THEN 0 ELSE 1 END, id asc").
+		Find(&rows)
+	for _, s := range rows {
+		out[s.CameraID] = append(out[s.CameraID], s)
+	}
+	return out
 }
 
 type cameraReq struct {
@@ -259,6 +290,12 @@ func (h *CameraHandler) Update(c *gin.Context) {
 	}
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
+	}
+	// The analysis loop caches the resolved stream URL; editing it here must
+	// take effect on the next tick rather than up to a TTL later.
+	streamTouched := req.MainURL != "" || req.SubURL != ""
+	if streamTouched && h.Runtime != nil {
+		h.Runtime.InvalidateStream(cam.ID)
 	}
 	if err := h.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&cam).Updates(updates).Error; err != nil {

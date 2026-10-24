@@ -1,6 +1,7 @@
 package videoai
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -21,7 +22,16 @@ type Update struct {
 	Overlay      map[string]any `json:"overlay,omitempty"`
 	EventID      uint           `json:"event_id,omitempty"`
 	TS           time.Time      `json:"ts"`
+
+	// raw is the pre-marshalled frame, filled in by the hub so N subscribers
+	// share one encoding instead of each paying for it. Not part of the wire
+	// format; consumers must fall back to marshalling when it is empty.
+	raw []byte
 }
+
+// Raw returns the pre-marshalled JSON, or nil when the update was not built by
+// the hub (for example a hand-constructed test value).
+func (u Update) Raw() []byte { return u.raw }
 
 // Hub fans out analysis updates to WebSocket subscribers. It keeps the latest
 // update per deployment so a client that connects mid-stream is immediately in
@@ -43,8 +53,23 @@ func (h *Hub) Publish(u Update) {
 	if u.DeploymentID != 0 {
 		h.last[u.DeploymentID] = u
 	}
+	u.raw = h.encode(u)
 	h.fanout(u)
 	h.mu.Unlock()
+}
+
+// encode marshals once per update rather than once per subscriber. With no
+// subscribers there is nothing to send, so the work is skipped entirely —
+// an unattended deployment does no JSON encoding at all.
+func (h *Hub) encode(u Update) []byte {
+	if len(h.subs) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(u)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // PublishStatus broadcasts a status-only update (no geometry) while keeping
@@ -58,8 +83,11 @@ func (h *Hub) PublishStatus(u Update) {
 		if prev, ok := h.last[u.DeploymentID]; ok && u.Overlay == nil {
 			u.Overlay = prev.Overlay
 		}
-		h.last[u.DeploymentID] = u
+		stored := u
+		stored.raw = nil // do not retain the encoded frame in the replay cache
+		h.last[u.DeploymentID] = stored
 	}
+	u.raw = h.encode(u)
 	h.fanout(u)
 	h.mu.Unlock()
 }

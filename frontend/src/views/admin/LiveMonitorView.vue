@@ -158,13 +158,28 @@ const resultColor: Record<string, string> = {
   unknown: "#626976", offline: "#868e96",
 };
 
+// Panel sizes are cached: reading clientWidth/clientHeight forces a layout
+// reflow, and doing that for all 16 panels on every frame turned a
+// 2 FPS analysis stream into hundreds of reflows per second. The
+// ResizeObserver below is the single place that refreshes them.
+const panelSizes = ref<{ w: number; h: number }[]>([]);
+
+function measureSlots() {
+  const next: { w: number; h: number }[] = [];
+  for (let i = 0; i < slotCount.value; i++) {
+    const box = canvases.value[i]?.parentElement;
+    next.push(box ? { w: box.clientWidth, h: box.clientHeight } : { w: 0, h: 0 });
+  }
+  panelSizes.value = next;
+}
+
 function drawOverlay(idx: number) {
   const cv = canvases.value[idx];
   if (!cv) return;
-  const box = cv.parentElement;
-  if (!box) return;
-  const w = box.clientWidth;
-  const h = box.clientHeight;
+  const size = panelSizes.value[idx];
+  const w = size?.w || 0;
+  const h = size?.h || 0;
+  if (w <= 0 || h <= 0) return;
   const dpr = window.devicePixelRatio || 1;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr);
@@ -225,7 +240,16 @@ function drawOverlay(idx: number) {
 }
 
 function redrawAll() {
+  measureSlots();
   for (let i = 0; i < slotCount.value; i++) drawOverlay(i);
+}
+
+// drawCamera repaints only the panel showing a camera. An update arrives per
+// camera per tick, so redrawing the whole grid multiplied the canvas work by
+// the number of panels.
+function drawCamera(cameraId: number) {
+  const idx = slots.value.indexOf(cameraId);
+  if (idx >= 0) drawOverlay(idx);
 }
 
 // --------------------------------------------------------- websocket ----
@@ -247,7 +271,9 @@ function connectWS() {
         liveEvents.value.unshift({ ...u, at: u.ts || new Date().toISOString() });
         if (liveEvents.value.length > 30) liveEvents.value.pop();
       }
-      nextTick(redrawAll);
+      // Repaint just this camera's panel; a deep watcher used to redraw every
+      // panel on every message from every camera.
+      nextTick(() => drawCamera(u.camera_id));
     } catch {
       /* ignore malformed frame */
     }
@@ -272,6 +298,8 @@ const resultLabel: Record<string, string> = {
 
 watch(slots, () => {
   for (let i = 0; i < slotCount.value; i++) playSlot(i);
+  // Panels changed: sizes and canvases must be re-measured and repainted.
+  nextTick(redrawAll);
   // Release players that fell outside the shrunken grid so their HLS/ffmpeg
   // resources are freed instead of leaking behind removed DOM nodes.
   for (const [idx, h] of hlsMap) {
@@ -283,7 +311,10 @@ watch(slots, () => {
     }
   }
 }, { deep: true });
-watch([overlays, results], () => nextTick(redrawAll), { deep: true });
+// No deep watcher on overlays/results: repainting is driven by the message
+// that changed them (drawCamera) and by layout/resize changes. Deep-watching
+// two reactive maps also fired a second redraw for every single update.
+//
 // Layout changes add new panels; observe them so overlays keep tracking size.
 watch(slotCount, () => {
   nextTick(() => {
@@ -298,6 +329,8 @@ let resizeObserver: ResizeObserver | null = null;
 onMounted(async () => {
   await load();
   connectWS();
+  // Resize is the only moment panel geometry legitimately changes, and it is
+  // rare — so it re-measures, while per-tick updates reuse the cached size.
   resizeObserver = new ResizeObserver(() => redrawAll());
   document.querySelectorAll(".live-stage").forEach((el) => resizeObserver!.observe(el));
   window.addEventListener("resize", redrawAll);

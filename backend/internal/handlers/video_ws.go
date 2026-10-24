@@ -64,7 +64,7 @@ func (h *VideoWSHandler) Stream(c *gin.Context) {
 			continue
 		}
 		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-		if err := conn.WriteJSON(u); err != nil {
+		if err := writeUpdate(conn, u); err != nil {
 			return
 		}
 	}
@@ -95,7 +95,7 @@ func (h *VideoWSHandler) Stream(c *gin.Context) {
 				continue
 			}
 			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-			if err := conn.WriteJSON(u); err != nil {
+			if err := writeUpdate(conn, u); err != nil {
 				return
 			}
 		case <-ticker.C:
@@ -105,6 +105,15 @@ func (h *VideoWSHandler) Stream(c *gin.Context) {
 			}
 		}
 	}
+}
+
+// writeUpdate sends one hub update. The hub encodes each frame once, so every
+// open panel shares that encoding instead of marshalling the same JSON again.
+func writeUpdate(conn *websocket.Conn, u videoai.Update) error {
+	if raw := u.Raw(); len(raw) > 0 {
+		return conn.WriteMessage(websocket.TextMessage, raw)
+	}
+	return conn.WriteJSON(u)
 }
 
 // parseInts parses a comma separated list of ids.

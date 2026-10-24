@@ -99,6 +99,9 @@ func (h *CameraHandler) Frame(c *gin.Context) {
 // not bound to an NVR agent.
 const mjpegBoundary = "--frame"
 
+// keepalivePart is an empty multipart part, sent on idle streams.
+const keepalivePart = "--" + mjpegBoundary + "\r\n\r\n"
+
 func (h *CameraHandler) MJPEG(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var cam models.Camera
@@ -127,8 +130,18 @@ func (h *CameraHandler) MJPEG(c *gin.Context) {
 	c.Status(http.StatusOK)
 
 	w := c.Writer
+	// Written directly rather than with fmt.Fprintf: the multipart header is
+	// emitted for every frame of every open panel, and Fprintf reparses its
+	// format string through reflection each time.
+	header := "--" + mjpegBoundary + "\r\nContent-Type: image/jpeg\r\nContent-Length: "
 	writePart := func(jpeg []byte) bool {
-		if _, err := fmt.Fprintf(w, "--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", mjpegBoundary, len(jpeg)); err != nil {
+		if _, err := w.WriteString(header); err != nil {
+			return false
+		}
+		if _, err := w.WriteString(strconv.Itoa(len(jpeg))); err != nil {
+			return false
+		}
+		if _, err := w.WriteString("\r\n\r\n"); err != nil {
 			return false
 		}
 		if _, err := w.Write(jpeg); err != nil {
@@ -164,7 +177,7 @@ func (h *CameraHandler) MJPEG(c *gin.Context) {
 			}
 		case <-keepalive.C:
 			// Comment line keeps intermediaries from closing an idle stream.
-			if _, err := fmt.Fprintf(w, "--%s\r\n\r\n", mjpegBoundary); err != nil {
+			if _, err := w.WriteString(keepalivePart); err != nil {
 				return
 			}
 			w.Flush()

@@ -97,8 +97,13 @@ func (d *ffmpegDecoder) close() error {
 // --------------------------------------------------------- jpeg scanner ----
 
 // jpegScanner splits a concatenated JPEG stream into individual frames.
+//
+// It keeps a read offset instead of re-slicing the accumulation buffer on every
+// emitted frame: at 2 FPS a 16-camera host pushes ~2 MB/s through here, and
+// reallocating the tail after each frame turned that into quadratic copying.
 type jpegScanner struct {
 	buf     []byte
+	off     int // consumed prefix of buf
 	frame   []byte
 	inFrame bool
 }
@@ -108,32 +113,55 @@ var (
 	eoi = []byte{0xFF, 0xD9}
 )
 
+// compact drops the consumed prefix once it is worth the copy.
+func (s *jpegScanner) compact() {
+	if s.off == 0 {
+		return
+	}
+	if s.off >= len(s.buf) {
+		s.buf = s.buf[:0]
+	} else if s.off >= 4096 {
+		copy(s.buf, s.buf[s.off:])
+		s.buf = s.buf[:len(s.buf)-s.off]
+	} else {
+		return
+	}
+	s.off = 0
+}
+
 func (s *jpegScanner) feed(b []byte, emit func([]byte)) {
 	s.buf = append(s.buf, b...)
 	for {
 		if !s.inFrame {
-			i := bytes.Index(s.buf, soi)
+			i := bytes.Index(s.buf[s.off:], soi)
 			if i < 0 {
 				// Keep a possible partial start marker (a trailing 0xFF)
 				// instead of dropping it, or frames split across reads
 				// would never be recognised.
 				keep := len(soi) - 1
-				if len(s.buf) > keep {
-					s.buf = append([]byte(nil), s.buf[len(s.buf)-keep:]...)
+				if len(s.buf)-s.off > keep {
+					tail := s.buf[len(s.buf)-keep:]
+					copy(s.buf, tail)
+					s.buf = s.buf[:keep]
+					s.off = 0
+				} else {
+					s.compact()
 				}
 				return
 			}
-			s.buf = s.buf[i+len(soi):]
+			s.off += i + len(soi)
 			s.inFrame = true
-			s.frame = append([]byte(nil), soi...)
+			s.frame = append(s.frame[:0], soi...)
 			continue
 		}
-		i := bytes.Index(s.buf, eoi)
+		i := bytes.Index(s.buf[s.off:], eoi)
 		if i < 0 {
+			s.compact()
 			return
 		}
-		s.frame = append(s.frame, s.buf[:i+len(eoi)]...)
-		s.buf = append([]byte(nil), s.buf[i+len(eoi):]...)
+		end := s.off + i + len(eoi)
+		s.frame = append(s.frame, s.buf[s.off:end]...)
+		s.off = end
 		s.inFrame = false
 		emit(s.frame)
 		s.frame = nil
@@ -342,8 +370,10 @@ func drainFrames(r io.Reader, sink frameSink) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			chunk := append([]byte(nil), buf[:n]...)
-			sc.feed(chunk, func(j []byte) {
+			// feed copies into its own accumulation buffer, so the chunk can
+			// be handed over directly: allocating and copying 64 KB per read
+			// only to copy it again inside the scanner was pure overhead.
+			sc.feed(buf[:n], func(j []byte) {
 				sink(j, time.Now())
 			})
 		}

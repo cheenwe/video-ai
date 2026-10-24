@@ -2,8 +2,12 @@ package videoai
 
 import (
 	"fmt"
+	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -124,9 +128,49 @@ type SelfCheckResult struct {
 // (see backend/workers/onnx/worker.py). The platform owns frame intake,
 // pre-processing and post-processing; the worker owns the ORT session, so no
 // CGO/ORT binding is compiled into this binary.
+// workerPoolSize is how many worker processes a single model key may run.
+//
+// One worker handles one inference at a time, so a single session serialises
+// every camera bound to that model: with 8 cameras at 2 FPS and a 60 ms model,
+// the last camera would wait half a second behind the first. The pool is sized
+// from GOMAXPROCS (capped, since each worker is a Python process with its own
+// ORT session and memory) and can be pinned with
+// BASE_VIDEO_AI_ONNX_WORKERS.
+var workerPoolSize = func() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		n = 1
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("BASE_VIDEO_AI_ONNX_WORKERS"))); err == nil && v > 0 {
+		n = v
+	}
+	if n > 8 {
+		n = 8
+	}
+	return n
+}()
+
+// modelWorkers is the set of sessions serving one model key. Sessions are
+// handed out round-robin; a busy one simply makes the caller wait for the next
+// free slot instead of for the whole model.
+type modelWorkers struct {
+	sessions []*workerSession
+	next     uint64
+}
+
+func (mw *modelWorkers) pick() *workerSession {
+	if len(mw.sessions) == 0 {
+		return nil
+	}
+	// Cheap round-robin: strict least-loaded tracking would need per-session
+	// counters that go stale immediately anyway.
+	i := atomic.AddUint64(&mw.next, 1)
+	return mw.sessions[int(i)%len(mw.sessions)]
+}
+
 type onnxAdapter struct {
 	mu       sync.Mutex
-	sessions map[string]*workerSession
+	sessions map[string]*modelWorkers
 }
 
 func (a *onnxAdapter) Name() string { return "onnx" }
@@ -154,6 +198,9 @@ func (a *onnxAdapter) Infer(cameraID uint, f Frame, cfg ModelConfig) ([]Detectio
 	if err != nil {
 		return nil, fmt.Errorf("帧预处理失败: %w", err)
 	}
+	// The tensor is pooled; it only has to outlive the synchronous worker
+	// round-trip, after which the buffer goes back for the next frame.
+	defer putTensor(tensor)
 	sess, err := a.session(cfg)
 	if err != nil {
 		return nil, err
@@ -165,33 +212,76 @@ func (a *onnxAdapter) Infer(cameraID uint, f Frame, cfg ModelConfig) ([]Detectio
 		a.dropSession(cfg)
 		return nil, err
 	}
+	defer releaseTensors(outs)
 	return postprocess(outs, cfg, lb, f.W, f.H)
 }
 
-// session returns a live worker for the config, spawning one on demand.
+// session returns a live worker for the config, spawning one on demand and
+// growing the pool up to workerPoolSize as cameras contend for it.
+//
+// The pool grows lazily: a deployment with one camera pays for one worker.
+// Growth is what makes multi-camera deployments parallel instead of queued.
 func (a *onnxAdapter) session(cfg ModelConfig) (*workerSession, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.sessions == nil {
-		a.sessions = map[string]*workerSession{}
-	}
 	key := sessionKey(cfg)
-	if s, ok := a.sessions[key]; ok && s.alive() {
-		return s, nil
+
+	a.mu.Lock()
+	if a.sessions == nil {
+		a.sessions = map[string]*modelWorkers{}
 	}
+	mw := a.sessions[key]
+	if mw != nil {
+		if s := mw.pick(); s != nil && s.alive() {
+			a.mu.Unlock()
+			return s, nil
+		}
+	}
+	a.mu.Unlock()
+
+	// Spawning costs a Python + ORT startup, so it happens outside the lock;
+	// concurrent spawns are bounded by demand (one per contending camera).
 	s, err := newWorkerSession(cfg)
 	if err != nil {
 		return nil, err
 	}
-	a.sessions[key] = s
-	return s, nil
+
+	// Every mutation of mw.sessions happens under a.mu; readers (pick) hold it
+	// too, so the slice is never written while another goroutine walks it.
+	a.mu.Lock()
+	mw = a.sessions[key]
+	if mw == nil {
+		a.sessions[key] = &modelWorkers{sessions: []*workerSession{s}}
+		a.mu.Unlock()
+		return s, nil
+	}
+	for i, old := range mw.sessions {
+		if !old.alive() {
+			mw.sessions[i] = s
+			a.mu.Unlock()
+			old.close()
+			return s, nil
+		}
+	}
+	if len(mw.sessions) < workerPoolSize {
+		mw.sessions = append(mw.sessions, s)
+		a.mu.Unlock()
+		return s, nil
+	}
+	// At capacity: this spawn raced another one, so retire the extra process.
+	live := mw.pick()
+	a.mu.Unlock()
+	s.close()
+	return live, nil
 }
 
+// dropSession retires the workers of a model key after a failure so the next
+// tick respawns them against a freshly loaded model.
 func (a *onnxAdapter) dropSession(cfg ModelConfig) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if s, ok := a.sessions[sessionKey(cfg)]; ok {
-		s.close()
+	if mw, ok := a.sessions[sessionKey(cfg)]; ok {
+		for _, s := range mw.sessions {
+			s.close()
+		}
 		delete(a.sessions, sessionKey(cfg))
 	}
 }
@@ -200,8 +290,10 @@ func (a *onnxAdapter) dropSession(cfg ModelConfig) {
 func (a *onnxAdapter) CloseAll() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for k, s := range a.sessions {
-		s.close()
+	for k, mw := range a.sessions {
+		for _, s := range mw.sessions {
+			s.close()
+		}
 		delete(a.sessions, k)
 	}
 }
@@ -231,12 +323,14 @@ func (a *onnxAdapter) SelfCheck(cfg ModelConfig) SelfCheckResult {
 		res.SampleDetail = "样例帧构造失败: " + err.Error()
 		return res
 	}
+	defer putTensor(tensor)
 	dets, err := sess.run(tensor, cfg)
 	if err != nil {
 		a.dropSession(cfg)
 		res.SampleDetail = "样例推理失败: " + err.Error()
 		return res
 	}
+	defer releaseTensors(dets)
 	res.SampleOK = true
 	res.SampleDetail = fmt.Sprintf("样例推理完成，输出 %d 个检测", len(dets))
 	return res

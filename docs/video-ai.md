@@ -49,12 +49,29 @@
 - 协议与实现：`backend/workers/onnx/`（`worker.py` + `requirements.txt` + README）。
 - 平台负责取流、JPEG 解码、letterbox、归一化、NCHW 张量构建、输出解码与 NMS；worker 只持有 ORT 会话。
 - 会话按模型配置惰性启动、长驻；崩溃或 15s 超时后标记死亡，下一 tick 重启。
+- **每个模型维护一个 worker 池**（默认 `min(GOMAXPROCS,8)`，`BASE_VIDEO_AI_ONNX_WORKERS` 可调）。一个 worker 一次只做一次推理，若只有单个会话，共用同一模型的多路摄像头会互相排队；池按争用惰性扩容，单路布控仍只占一个进程。
 - 自检（`POST /api/algorithms/model-versions/:id/self-check`）会**真实加载模型并跑一帧样例推理**；worker 不可用时如实失败，不会伪装通过。
 - 自定义 worker：设置 `BASE_VIDEO_AI_ONNX_WORKER` 指向自己的命令（需实现同一协议）。
 
 ```bash
 pip install -r backend/workers/onnx/requirements.txt   # onnxruntime + numpy
 ```
+
+## 性能
+
+热路径（每帧、每 tick）已做针对性优化，`scripts/video-ai-bench.sh` 可复现这些数字：
+
+| 环节 | 优化前 | 优化后 | 做法 |
+| --- | --- | --- | --- |
+| 帧预处理（1280x720 → 640x640） | 23.6 ms / 22.8 MB | **11.1 ms / 1.75 MB** | 张量与 letterbox 画布池化；像素直读 `RGBA.Pix`（原来每像素一次 `At().RGBA()` 接口调用）；缩放器按尺寸缓存，避免每帧重建 14.7 MB 临时缓冲与贡献表 |
+| 帧缩放插值 | 14.4 ms | **4.5 ms** | 默认 `ApproxBiLinear`（与双线性平均差 0.68/255）；`BASE_VIDEO_AI_RESIZE=bilinear` 可切回精确核 |
+| 后处理（8400 anchor） | 8657 次分配 | **55 次分配** | 每个 anchor 的分数向量改为池化复用 |
+| 每 tick 数据库写入 | 5 次 UPDATE | **2 次 UPDATE** | 相机状态、`applied_revision`、overlay 仅在变化时写（overlay 剥离随帧变化的 `frame_age_ms`） |
+| 每 tick 数据库读取 | 每次重查码流/边界/模型 | **带 TTL 缓存 + 变更显式失效** | 发布边界、发布/改绑模型、编辑码流时由 handler 主动失效 |
+| WebSocket 广播 | 每 tick 2 条、每订阅者各序列化一次 | **每 tick 1 条、整条只序列化一次** | 无订阅者时完全不编码（0 分配） |
+| 摄像头列表 / 布控列表 | N+1（51 / 201 条语句） | **2 条语句** | 码流与 runtime 行改为 `IN` 批量预取 |
+
+其他：报表汇总把对事件表的 5 次 `COUNT` 扫描合并为 1 次；补了 `(camera_id,started_at)`、`(handle_status,started_at)`、`(day,camera_id,deployment_id)`、`(camera_id,ended_at)`、`(camera_id,enabled)` 复合索引；MJPEG 帧扫描器改为读取偏移记账（不再每帧重分配），一次 64 KB 读取不再额外拷贝；实时监控前端只重绘变化的那一格并缓存面板尺寸，去掉了每帧对全部面板的强制回流。
 
 ## 菜单与权限
 
@@ -107,7 +124,7 @@ pip install -r backend/workers/onnx/requirements.txt   # onnxruntime + numpy
 - **ONNX Runtime 不在主二进制内**：推理经独立 worker（`backend/workers/onnx`）。worker 未安装时 `/api/video/self-check` 的 `onnx_worker` 项失败，模型版本自检失败——这是诚实失败，不是缺陷。当前仅验证过 CPU provider；GPU（CUDA）需在 worker 环境启用。
 - **模型输出布局假设 YOLO detect**（`[1, 4+nc, N]` 或 `[1, N, 4+nc]`）；其他布局需在 `internal/videoai/postprocess.go` 扩展解码。
 - **自动坑边候选不可用**：演示折线生成器已移除；AI 候选需真实模型推理（当前接口明确返回不可用）。
-- **MJPEG 预览路数上限**：并发预览默认 32 路（每路一个 ffmpeg 解码进程），可用 `BASE_VIDEO_AI_MAX_PREVIEW` 调整；超限时面板提示「超过服务端预览上限」。
+- **MJPEG 预览路数上限**：并发预览连接默认 32（`BASE_VIDEO_AI_MAX_PREVIEW`）；同一摄像头的多个面板复用同一个取流解码器，超限时面板提示「超过服务端预览上限」。
 - **GB28181 / 推流**：信令探测（SIP OPTIONS）与媒体拨测已对接真实协议；完整注册 / 媒体会话未与真机联验，按实际设备推进。
 - **直连 RTSP 连续录像未接入**：录像计划可保存，执行依赖 nvr-agent；事件片段（clip.mp4）来自取流缓冲环。
 - NVR 预览/录像仍走 [nvr.md](nvr.md)；平台摄像头是统一业务实体。

@@ -19,3 +19,4 @@ data/
 agent/
 release/
 .cu*
+bench-results.txt

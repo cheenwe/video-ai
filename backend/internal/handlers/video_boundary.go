@@ -19,6 +19,9 @@ import (
 
 type BoundaryHandler struct {
 	DB *gorm.DB
+	// Runtime is optional; when set, publishing a boundary invalidates the
+	// cached geometry so analysis picks it up on the next tick.
+	Runtime *videoai.Manager
 }
 
 func (h *BoundaryHandler) List(c *gin.Context) {
@@ -114,6 +117,9 @@ func (h *BoundaryHandler) Publish(c *gin.Context) {
 	if err != nil {
 		response.BizFail(c, "发布失败", 500)
 		return
+	}
+	if h.Runtime != nil {
+		h.Runtime.InvalidateBoundary(bv.ID)
 	}
 	_ = h.DB.First(&bv, id)
 	services.LogAction(h.DB, c, "audit", "success", "boundary.publish", &u, fmt.Sprintf("id=%d", id))

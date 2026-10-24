@@ -42,15 +42,17 @@ type Camera struct {
 func (Camera) TableName() string { return "cameras" }
 
 // StreamProfile 主/子码流配置版本。
+//
+// (camera_id, enabled) 复合索引服务分析循环每次取帧都要做的码流查询。
 type StreamProfile struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
-	CameraID   uint      `gorm:"index;not null" json:"camera_id"`
+	CameraID   uint      `gorm:"index:idx_stream_cam_enabled,priority:1;not null" json:"camera_id"`
 	Role       string    `gorm:"size:16;not null" json:"role"` // main | sub
 	URL        string    `gorm:"size:512" json:"url"`
 	Protocol   string    `gorm:"size:32;not null;default:rtsp" json:"protocol"`
 	Revision   int       `gorm:"not null;default:1" json:"revision"`
 	FOVChanged int       `gorm:"not null;default:0" json:"fov_changed"`
-	Enabled    int       `gorm:"not null;default:1" json:"enabled"`
+	Enabled    int       `gorm:"index:idx_stream_cam_enabled,priority:2;not null;default:1" json:"enabled"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -188,23 +190,23 @@ func (DeploymentRevision) TableName() string { return "deployment_revisions" }
 
 // RuntimeStatus 每路分析运行时状态。
 type RuntimeStatus struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	DeploymentID uint       `gorm:"uniqueIndex;not null" json:"deployment_id"`
-	CameraID     uint       `gorm:"index;not null" json:"camera_id"`
-	State        string     `gorm:"size:32;not null;default:stopped" json:"state"`
-	AppliedRev   int        `gorm:"not null;default:0" json:"applied_rev"`
-	ActualFPS    float64    `json:"actual_fps"`
-	FrameAgeMS   int64      `json:"frame_age_ms"`
-	QueueDropped int64      `json:"queue_dropped"`
-	Backend      string     `gorm:"size:64" json:"backend"`
-	ModelLoaded  int        `gorm:"not null;default:0" json:"model_loaded"`
-	LastResult   string     `gorm:"size:64" json:"last_result"` // normal|near|cross|unknown|offline
-	LastError    string     `gorm:"size:512" json:"last_error"`
+	ID           uint    `gorm:"primaryKey" json:"id"`
+	DeploymentID uint    `gorm:"uniqueIndex;not null" json:"deployment_id"`
+	CameraID     uint    `gorm:"index;not null" json:"camera_id"`
+	State        string  `gorm:"size:32;not null;default:stopped" json:"state"`
+	AppliedRev   int     `gorm:"not null;default:0" json:"applied_rev"`
+	ActualFPS    float64 `json:"actual_fps"`
+	FrameAgeMS   int64   `json:"frame_age_ms"`
+	QueueDropped int64   `json:"queue_dropped"`
+	Backend      string  `gorm:"size:64" json:"backend"`
+	ModelLoaded  int     `gorm:"not null;default:0" json:"model_loaded"`
+	LastResult   string  `gorm:"size:64" json:"last_result"` // normal|near|cross|unknown|offline
+	LastError    string  `gorm:"size:512" json:"last_error"`
 	// LastOverlayJSON keeps the geometry of the most recent analysis so the live
 	// view can draw the boundary and detections on top of the video.
-	LastOverlayJSON string `gorm:"type:text" json:"last_overlay_json"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	HeartbeatAt  *time.Time `json:"heartbeat_at"`
+	LastOverlayJSON string     `gorm:"type:text" json:"last_overlay_json"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	HeartbeatAt     *time.Time `json:"heartbeat_at"`
 }
 
 func (RuntimeStatus) TableName() string { return "runtime_statuses" }
@@ -212,11 +214,14 @@ func (RuntimeStatus) TableName() string { return "runtime_statuses" }
 // AnalysisStat is a daily per-deployment counter rollup. It backs operational
 // metrics such as the undecidable rate, which cannot be derived from events
 // alone (most frames never raise an event).
+//
+// (day, camera_id, deployment_id) is unique and indexed: the analysis loop
+// increments one row per tick, so that lookup must not scan.
 type AnalysisStat struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
-	Day          string    `gorm:"size:10;not null;index" json:"day"` // YYYY-MM-DD
-	CameraID     uint      `gorm:"index;not null" json:"camera_id"`
-	DeploymentID uint      `gorm:"index;not null" json:"deployment_id"`
+	Day          string    `gorm:"size:10;not null;index:idx_stat_day_cam_dep,priority:1" json:"day"` // YYYY-MM-DD
+	CameraID     uint      `gorm:"index:idx_stat_day_cam_dep,priority:2;not null" json:"camera_id"`
+	DeploymentID uint      `gorm:"index:idx_stat_day_cam_dep,priority:3;not null" json:"deployment_id"`
 	Ticks        int64     `gorm:"not null;default:0" json:"ticks"`
 	Normal       int64     `gorm:"not null;default:0" json:"normal"`
 	Near         int64     `gorm:"not null;default:0" json:"near"`
@@ -233,11 +238,13 @@ func (AnalysisStat) TableName() string { return "analysis_stats" }
 // usable frames. It is opened when analysis degrades to offline/unknown and
 // closed when frames resume, so offline duration is measured, not guessed.
 type MediaOutage struct {
-	ID          uint       `gorm:"primaryKey" json:"id"`
-	CameraID    uint       `gorm:"index;not null" json:"camera_id"`
-	ProjectID   *uint      `gorm:"index" json:"project_id"`
-	StartedAt   time.Time  `gorm:"index;not null" json:"started_at"`
-	EndedAt     *time.Time `gorm:"index" json:"ended_at"`
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	CameraID  uint      `gorm:"index:idx_outage_cam_ended,priority:1;not null" json:"camera_id"`
+	ProjectID *uint     `gorm:"index" json:"project_id"`
+	StartedAt time.Time `gorm:"index;not null" json:"started_at"`
+	// (camera_id, ended_at) serves "is this camera already in an outage",
+	// which the analysis loop asks whenever media goes down.
+	EndedAt     *time.Time `gorm:"index:idx_outage_cam_ended,priority:2" json:"ended_at"`
 	DurationSec int64      `json:"duration_sec"` // 0 while still open
 	Reason      string     `gorm:"size:512" json:"reason"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -248,18 +255,21 @@ func (MediaOutage) TableName() string { return "media_outages" }
 
 // VideoEvent 现场分析事件（与 PlatformEvent 通知总线分离）。
 type VideoEvent struct {
-	ID                 uint       `gorm:"primaryKey" json:"id"`
-	EventKey           string     `gorm:"size:128;not null;uniqueIndex" json:"event_key"` // 稳定合并键
-	CameraID           uint       `gorm:"index;not null" json:"camera_id"`
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	EventKey string `gorm:"size:128;not null;uniqueIndex" json:"event_key"` // 稳定合并键
+	// The event list filters by camera and status and sorts by recency, so the
+	// composite indexes cover the real query instead of three single-column
+	// ones that SQLite cannot combine cheaply.
+	CameraID           uint       `gorm:"index:idx_event_cam_started,priority:1;not null" json:"camera_id"`
 	ProjectID          *uint      `gorm:"index" json:"project_id"`
 	DeploymentID       *uint      `gorm:"index" json:"deployment_id"`
 	Category           string     `gorm:"size:64;not null;index" json:"category"` // grab_near_edge | grab_cross_boundary
 	Level              string     `gorm:"size:32;not null;default:warning" json:"level"`
-	SceneStatus        string     `gorm:"size:32;not null;default:active;index" json:"scene_status"`   // active | recovered | unknown
-	HandleStatus       string     `gorm:"size:32;not null;default:pending;index" json:"handle_status"` // pending|confirmed|processing|closed
-	Conclusion         string     `gorm:"size:32" json:"conclusion"`                                   // real|false_positive|unknown
+	SceneStatus        string     `gorm:"size:32;not null;default:active;index" json:"scene_status"`                                       // active | recovered | unknown
+	HandleStatus       string     `gorm:"size:32;not null;default:pending;index:idx_event_handle_started,priority:1" json:"handle_status"` // pending|confirmed|processing|closed
+	Conclusion         string     `gorm:"size:32" json:"conclusion"`                                                                       // real|false_positive|unknown
 	ConclusionRemark   string     `gorm:"size:1024" json:"conclusion_remark"`
-	StartedAt          time.Time  `gorm:"index;not null" json:"started_at"`
+	StartedAt          time.Time  `gorm:"index:idx_event_cam_started,priority:2;index:idx_event_handle_started,priority:2;not null" json:"started_at"`
 	LastEvidenceAt     time.Time  `json:"last_evidence_at"`
 	EndedAt            *time.Time `json:"ended_at"`
 	TriggerMetricJSON  string     `gorm:"type:text" json:"trigger_metric_json"`

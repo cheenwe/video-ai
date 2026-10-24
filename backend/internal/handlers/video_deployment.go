@@ -35,11 +35,24 @@ func (h *DeploymentHandler) List(c *gin.Context) {
 	}
 	var items []models.Deployment
 	q.Order("id desc").Limit(200).Find(&items)
+	// Batch the runtime rows: one IN query instead of one per deployment,
+	// which at the 200-row cap was 201 statements per page load.
+	ids := make([]uint, 0, len(items))
+	for _, d := range items {
+		ids = append(ids, d.ID)
+	}
+	rtByDep := map[uint]models.RuntimeStatus{}
+	if len(ids) > 0 {
+		var rows []models.RuntimeStatus
+		h.DB.Where("deployment_id IN ?", ids).Find(&rows)
+		for _, r := range rows {
+			rtByDep[r.DeploymentID] = r
+		}
+	}
 	out := make([]gin.H, 0, len(items))
 	for _, d := range items {
 		row := deploymentOut(d)
-		var rt models.RuntimeStatus
-		if h.DB.Where("deployment_id = ?", d.ID).First(&rt).Error == nil {
+		if rt, ok := rtByDep[d.ID]; ok {
 			row["runtime"] = rt
 		}
 		out = append(out, row)
